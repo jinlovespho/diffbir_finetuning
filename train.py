@@ -136,7 +136,6 @@ def main(args) -> None:
 
     diffusion: Diffusion = instantiate_from_config(cfg.model.diffusion)
 
-
     # set trainable parameters
     model_names=[]
     for name, param in cldm.named_parameters():
@@ -162,26 +161,6 @@ def main(args) -> None:
 
         elif cfg.pho_args.fine_tuning_method == 'etc':
             pass 
-
-    # unet_names=[]
-    # unet_params = []
-    # for name, param in cldm.unet.named_parameters():
-    #     unet_names.append(name)
-
-    #     if cfg.pho_args.fine_tuning_method == 'sd_full_fine_tuning':
-    #         print('FULL FINE TUNING')
-    #         param.requires_grad = True
-
-    #     elif cfg.pho_args.fine_tuning_method == 'only_ctrlnet':
-    #         pass
-
-    #     else:
-    #         if 'attn1' in name:
-    #             param.requires_grad = True
-    #             unet_params.append(param)
-    #         else:
-    #             param.requires_grad = False
-    
 
     # JLP 
     from adet.config import get_cfg
@@ -248,7 +227,6 @@ def main(args) -> None:
 
     batch_transform = instantiate_from_config(cfg.batch_transform)
 
-    # # OCR Module (TODO)
     # internvl, tokenizer = load_internvl()
     
     # Prepare models for training:
@@ -264,12 +242,7 @@ def main(args) -> None:
     global_step = 0
     max_steps = cfg.train_settings.train_steps
     step_loss = []
-
-    # JLP - additional loss 
-    step_ocr_rec_loss = []
-
-
-    step_ocr_loss = []
+    step_ocr_rec_loss = []  # JLP - additional loss 
     step_total_loss = []
     epoch = 0
     epoch_total_loss = []
@@ -308,7 +281,6 @@ def main(args) -> None:
                 txt_enc = encode(txt)
                 # print(f'encoded text: ', txt_enc)
                 # print('decoded txt: ', decode(txt_enc))
-                # breakpoint()
                 txt_encs.append(torch.tensor(txt_enc))
             txt_encs = torch.stack(txt_encs)
             txt_lens = torch.tensor(txt_lens)
@@ -470,14 +442,16 @@ def main(args) -> None:
             # # JLP - see pred recognized texts 
             print('')
             print('='*50)
+            pred_words=[]
             for i in range(bs):
                 pred = rec_outputs[i]
                 pred_idx = pred.argmax(dim=-1)
                 # row_idx = torch.arange(pred.shape[0])
                 # tmp2 = pred[row_idx, pred.argmax(dim=-1)]
                 pred_word = decode(pred_idx)
+                pred_words.append(pred_word)
                 print('GT Word: ', text[i])
-                print('Pred Word: ', pred_word)
+                print('Pred Word: ', pred_words[i])
                 print('-'*50)
 
             loss_rec = rec_criterion(rec_outputs, target_text, target_len)
@@ -528,13 +502,6 @@ def main(args) -> None:
                     .item()
                 )
 
-                # avg_ocr_loss = (
-                #     accelerator.gather(
-                #         torch.tensor(step_ocr_loss, device=device).unsqueeze(0)
-                #     )
-                #     .mean()
-                #     .item()
-                # )
                 avg_total_loss = (
                     accelerator.gather(
                         torch.tensor(step_total_loss, device=device).unsqueeze(0)
@@ -644,11 +611,11 @@ def main(args) -> None:
                             x1, y1, x2, y2 = int(x1.item()), int(y1.item()), int(x2.item()), int(y2.item())
                             cv2.rectangle(vis_gt, (x1,y1), (x2,y2), color=(0,255,0), thickness=4)
 
-                            cv2.putText(vis_gt, str(t.item()), (350,380), cv2.FONT_HERSHEY_SIMPLEX, 0.3, (255,0,0), 1, cv2.LINE_AA)
-                            cv2.putText(vis_gt, text[0], (350,400), cv2.FONT_HERSHEY_SIMPLEX, 0.3, (255,0,0), 1, cv2.LINE_AA)
-                            cv2.putText(vis_gt, pred_word, (350,420), cv2.FONT_HERSHEY_SIMPLEX, 0.3, (255,0,0), 1, cv2.LINE_AA)
+                            cv2.putText(vis_gt, str(t[i].item()), (350,380), cv2.FONT_HERSHEY_SIMPLEX, 0.3, (255,0,0), 1, cv2.LINE_AA)
+                            cv2.putText(vis_gt, text[i], (350,400), cv2.FONT_HERSHEY_SIMPLEX, 0.3, (255,0,0), 1, cv2.LINE_AA)
+                            cv2.putText(vis_gt, pred_words[i], (350,420), cv2.FONT_HERSHEY_SIMPLEX, 0.3, (255,0,0), 1, cv2.LINE_AA)
                             cv2.putText(vis_gt, str(round(loss_rec.item(),3)), (350,440), cv2.FONT_HERSHEY_SIMPLEX, 0.3, (255,0,0), 1, cv2.LINE_AA)
-                            cv2.imwrite(f'text.jpg', vis_gt[...,::-1])
+                            # cv2.imwrite(f'text.jpg', vis_gt[...,::-1])
                             vis_gt = torch.tensor(vis_gt)
                             vis_gt = vis_gt.cuda().permute(2,0,1).float() / 255.0
 
@@ -693,14 +660,6 @@ def main(args) -> None:
                             vis_lq = (vis_lq - vis_lq.min()) / (vis_lq.max()-vis_lq.min())
                             vis_clean = (vis_clean - vis_clean.min()) / (vis_clean.max() - vis_clean.min())
 
-                            # tmp1 = (pure_cldm.vae_decode(val_z)[i] + 1) / 2
-                            # tmp2 = (pure_cldm.vae_decode(val_pred_z_0)[i] + 1) / 2
-                            # tmp3 = (val_log_gt[i] + 1) / 2
-                            # tmp4 = val_log_lq[i]
-                            # tmp5 = val_log_clean[i]
-                            # # tmp6 = (pure_cldm.vae_decode(val_log_cond["c_img"])[i] + 1) / 2
-
-                            # lq(tmp4), clean(tmp5), cond(tmp6), sample(tmp1), pred_x0(tmp2), gt(tmp3)
                             val_img_all = torch.cat([vis_lq, vis_clean, vis_pred_x0, vis_sample, vis_gt], dim=-1)
                             wandb.log({f'vis_val/val_img_all_{i}':wandb.Image(val_img_all, caption=f'lq_clean_predx0_sample_gt')})
 
