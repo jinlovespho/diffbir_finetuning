@@ -25,7 +25,7 @@ pip install -r requirements.txt
 ```
 
 
-### Running training script 
+### Run training script 
 ```shell
 cd diffbir_finetuning
 bash run_script/train/run_train_diffbir_rgb_ocrRecLoss.sh
