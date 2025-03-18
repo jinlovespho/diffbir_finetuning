@@ -181,7 +181,7 @@ def main(args) -> None:
     # JLP - get only recognizer model from bridge 
     from DiG.models.model_builder import RecModel
     recognizer = RecModel(bridge_config)
-    checkpoint = torch.load("DiG/checkpoint-9.pth", map_location='cpu')
+    checkpoint = torch.load("./pretrained_weights/checkpoint-9.pth", map_location='cpu')
     msg=recognizer.load_state_dict(checkpoint["model"], False)
     recognizer.to('cuda')
     # recognizer.eval()
@@ -695,3 +695,5 @@ if __name__ == "__main__":
     parser.add_argument("--bridge_config", default="", metavar="FILE", help="path to config file")
     args = parser.parse_args()
     main(args)
+    # scp -r checkpoint-9.pth cvlab08@163.152.163.126:/home/cvlab08/projects/data/jinlovespho/nips25/github/diffbir_finetuning/pretrained_weights
+    # scp -r checkpoint-9.pth cvlab12@163.152.163.141:/media/dataset2/jinlovespho/DiffBIR/pretrained_weights
