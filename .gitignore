@@ -1,0 +1,9 @@
+*.pth 
+*.pt 
+
+generated_data/**
+pretrained_weights/**
+exp/**
+vis/**
+wandb/** 
+
