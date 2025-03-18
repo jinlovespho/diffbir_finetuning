@@ -23,3 +23,10 @@ pip install torch==2.2.2 torchvision==0.17.2 torchaudio==2.2.2 --index-url https
 pip install -r requirements.txt
 # 
 ```
+
+
+### Running training script 
+```shell
+cd diffbir_finetuning
+bash run_script/train/run_train_diffbir_rgb_ocrRecLoss.sh
+```
