@@ -21,7 +21,6 @@ conda activate pho_ocr
 pip install torch==2.2.2 torchvision==0.17.2 torchaudio==2.2.2 --index-url https://download.pytorch.org/whl/cu121
 # then install other libraries
 pip install -r requirements.txt
-# 
 ```
 
 
