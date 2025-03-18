@@ -143,8 +143,8 @@ train:
   # Our filtered laion2b-en (15M images)
   # batch size = 256, lr = 1e-4 (first 30k), 1e-5 (next 50k), total training steps = 80k
   noise_aug_timestep: 0
-  ckpt_every: 800
-  save_unet: 800
+  ckpt_every: 5000
+  save_unet: 5000
   resume: ./pretrained_weights/DiffBIR_v2.1.pt
   num_workers: 4
   log_train_every: 10
@@ -158,12 +158,12 @@ val:
 
 train_settings:
   train_batch_size: 1
-  learning_rate: 5e-6
-  train_steps: 4000
+  learning_rate: 1e-5
+  train_steps: 8000
 
 wandb_args:
   wandb_key: e32eed0c2509bf898b850b0065ab62345005fb73
-  wandb_exp_name: server5_gpu0_DiffBiR_FTctrlnet_bs1_lr5e-6_ocrRecLossOnlyWeight0.001
+  wandb_exp_name: pho_server5_gpu0_DiffBiR_FTctrlnet_bs1_lr1e-5_ocrRecLossOnlyWeight0.001
 
 pho_args:
   ocr_loss_weight: 0.001
