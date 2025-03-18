@@ -91,6 +91,7 @@ class CodeformerDataset(data.Dataset):
         downsample_range: Sequence[float],
         noise_range: Sequence[float],
         jpeg_range: Sequence[int],
+        pho_use_prompt=None,
         mode = 'train',
     ) -> "CodeformerDataset":
         super(CodeformerDataset, self).__init__()
@@ -110,6 +111,9 @@ class CodeformerDataset(data.Dataset):
         self.noise_range = noise_range
         self.jpeg_range = jpeg_range
 
+        # JLP 
+        self.pho_use_prompt=pho_use_prompt
+
         # # JLP - vis training dataset image, bbox, and text
         # for i in range(15):
         #     file = self.image_files[i]
@@ -123,6 +127,8 @@ class CodeformerDataset(data.Dataset):
         #     cv2.rectangle(img, (x,y), (x+w,y+h) , color= (0,255,0), thickness=2)
         #     cv2.imwrite(f'./vis/{dataset_name}_{img_name}_{txt}.jpg', img)
 
+        # JLP - set len images to 300
+        self.image_files.pop()
     
     def load_gt_image(
         self, image_path: str, max_retry: int = 5
@@ -173,8 +179,13 @@ class CodeformerDataset(data.Dataset):
         img_gt = (img_gt[..., ::-1] / 255.0).astype(np.float32)
         img_lq = (img_lq[..., ::-1] / 255.0).astype(np.float32)
         h, w, _ = img_gt.shape
-        if np.random.uniform() < 0.5:
-            prompt = ""
+
+        # JLP
+        # prompt = text
+        if self.pho_use_prompt:
+            prompt = f'A high-quality photo containing the word {text}'
+        else:
+            prompt=''
 
         # BGR to RGB, [-1, 1]
         gt = (img_gt[..., ::-1] * 2 - 1).astype(np.float32)

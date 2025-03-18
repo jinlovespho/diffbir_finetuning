@@ -95,7 +95,7 @@ model:
 
 dataset:
   train:
-    target: diffbir.dataset.codeformer_rgb_ocrRecLoss.CodeformerDataset
+    target: diffbir.dataset.codeformer_rgb_ocrRec.CodeformerDataset
     params:
       # training file list path
       file_list: ./generated_data
@@ -110,8 +110,9 @@ dataset:
       downsample_range: [1, 12]
       noise_range: [0, 15]
       jpeg_range: [30, 100]
+      pho_use_prompt: False
   val:
-    target: diffbir.dataset.codeformer_rgb_ocrRecLoss.CodeformerDataset
+    target: diffbir.dataset.codeformer_rgb_ocrRec.CodeformerDataset
     params:
       # training file list path
       file_list: ./generated_data
@@ -126,6 +127,7 @@ dataset:
       downsample_range: [1, 12]
       noise_range: [0, 15]
       jpeg_range: [30, 100]
+      pho_use_prompt: False
       mode: val
 batch_transform:
   target: diffbir.dataset.batch_transform.IdentityBatchTransform
@@ -147,8 +149,8 @@ train:
   save_unet: 5000
   resume: ./pretrained_weights/DiffBIR_v2.1.pt
   num_workers: 4
-  log_train_every: 10
-  log_train_img_every: 25
+  log_train_every: 30
+  log_train_img_every: 30
   
 val:
   val_batch_size: 6
@@ -161,11 +163,12 @@ train_settings:
   learning_rate: 1e-5
   train_steps: 8000
 
+pho_args:
+  model: DiffBIR_rgb_ocrRec
+  ocr_loss_weight: 0.001
+  finetuning_method: FT_ctrlnet
+
 wandb_args:
   wandb_key: e32eed0c2509bf898b850b0065ab62345005fb73
-  wandb_exp_name: pho_server5_gpu0_DiffBiR_FTctrlnet_bs1_lr1e-5_ocrRecLossOnlyWeight0.001
-
-pho_args:
-  ocr_loss_weight: 0.001
-  fine_tuning_method: only_ctrlnet_fine_tuning
+  wandb_exp_name: pho_server5_gpu3_DiffBIR_rgb_ocrRec_FTctrlnet_bs1_lr1e-5_ocrWeight0.001
 

@@ -50,6 +50,7 @@ def load_pair_list(file_list_path: str, mode='train') -> List[Dict[str, str]]:
                 continue
             if (bbox[2]*bbox[3])/(512*512) < 0.01:
                 continue
+
             files.append({"image_path": gt_path, "lr_image_path": lq_path, "prompt": '', "text": text, "bbox": bbox, "img_name": img_name})
     
     if mode=='val':

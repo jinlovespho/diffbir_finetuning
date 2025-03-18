@@ -28,52 +28,7 @@ import numpy as np
 import string
 from torchvision.transforms.functional import crop
 import torch.nn.functional as F 
-
-voc = list(string.printable[:-6])
-CTLABELS = [' ','!','"','#','$','%','&','\'','(',')','*','+',',','-','.','/',
-                '0','1','2','3','4','5','6','7','8','9',':',';','<','=','>','?','@',
-                'A','B','C','D','E','F','G','H','I','J','K','L','M','N','O','P','Q',
-                'R','S','T','U','V','W','X','Y','Z','[','\\',']','^','_','`','a','b',
-                'c','d','e','f','g','h','i','j','k','l','m','n','o','p','q','r','s',
-                't','u','v','w','x','y','z','{','|','}','~']
-
-def _decode_recognition(rec):
-    s = ''
-    for c in rec:
-        if c<95:
-            s += CTLABELS[c]
-        else:
-            return s
-    return s
-
-# JLP
-def decode(rec):
-    s = ''
-    for c in rec:
-        if c<94:
-            s += voc[c]
-        else:
-            return s
-    return s
-
-def encode(rec):
-    rec = rec.replace(' ','')
-    s = []
-    for i in range(25):
-        if i < len(rec):
-            try:
-                idx = voc.index(rec[i])
-            except:
-                if rec[i] == '-':
-                    idx = 74 
-            s.append(idx)
-        elif i == len(rec):
-            s.append(94)
-        else:
-            s.append(95)
-    return s
-
-
+from torchvision.transforms.functional import to_pil_image
 
 def main(args) -> None:
     # Setup accelerator:
@@ -159,53 +114,13 @@ def main(args) -> None:
             else:
                 param.requires_grad = False
 
+
+        elif cfg.pho_args.finetuning_method == 'etc':
+            pass 
+    
         else:
             raise Exception('FINE-TUNING METHOD IS NOT SET !!')
-
-
-    if cfg.pho_args.model == 'DiffBIR_baseline':
-        pass 
-    elif cfg.pho_args.model == 'DiffBIR_rgb_ocrDetRec':
-        pass
-    elif cfg.pho_args.model == 'DiffBIR_rgb_ocrRec':
-        print('MODEL: ', cfg.pho_args.model )
-        from adet.config import get_cfg
-        def setup(args):
-            """
-            Create configs and perform basic setups.
-            """
-            cfg = get_cfg()
-            cfg.merge_from_file(args.bridge_config)
-            cfg.freeze()
-            return cfg
-        bridge_config = setup(args)
-
-        # JLP - get spotter model
-        from adet.modeling.TESTR import TransformerDetector 
-        bridge_model = TransformerDetector(bridge_config)  
-        # JLP - get only recognizer model from bridge 
-        from DiG.models.model_builder import RecModel
-        recognizer = RecModel(bridge_config)
-        checkpoint = torch.load("./pretrained_weights/checkpoint-9.pth", map_location='cpu')
-        msg=recognizer.load_state_dict(checkpoint["model"], False)
-        recognizer.to('cuda')
-        print(msg)
-
-        for param in recognizer.parameters():
-            param.requires_grad=False
-
-        # JLP - criterion for recognizer
-        from DiG.loss import SeqCrossEntropyLoss
-        rec_criterion = SeqCrossEntropyLoss()
-    else:
-        raise Exception('MODEL IS NOT SET !!')
-
-    # Setup optimizer:
-    # params_to_optimize = [
-    #     {"params": cldm.controlnet.parameters(), "lr": cfg.train_settings.learning_rate},
-    #     {"params": unet_params, "lr": cfg.train_settings.learning_rate},
-    # ]
-    # opt = torch.optim.AdamW(params_to_optimize, lr=cfg.train_settings.learning_rate)
+    
     opt = torch.optim.AdamW(filter(lambda p: p.requires_grad, cldm.parameters()), lr=cfg.train_settings.learning_rate)
 
     torch.manual_seed(42)
@@ -233,8 +148,6 @@ def main(args) -> None:
 
     batch_transform = instantiate_from_config(cfg.batch_transform)
 
-    # internvl, tokenizer = load_internvl()
-    
     # Prepare models for training:
     cldm.train().to(device)
     swinir.eval().to(device)
@@ -248,7 +161,6 @@ def main(args) -> None:
     global_step = 0
     max_steps = cfg.train_settings.train_steps
     step_loss = []
-    step_ocr_rec_loss = []  # JLP - additional loss 
     step_total_loss = []
     epoch = 0
     epoch_total_loss = []
@@ -260,7 +172,7 @@ def main(args) -> None:
         wandb.login(key=cfg.wandb_args.wandb_key)
         wandb.init(project="DiffBIR_OCR_finetuning", name=cfg.wandb_args.wandb_exp_name, config=dict(cfg))
         print(f"Training for {max_steps} steps...")
-    
+        
     while global_step < max_steps:
         pbar = tqdm(
             iterable=None,
@@ -270,6 +182,8 @@ def main(args) -> None:
         )
         for train_iter, batch in enumerate(train_loader):
 
+            cldm.train()
+
             opt.zero_grad()
             to(batch, device)
             batch = batch_transform(batch)
@@ -277,53 +191,6 @@ def main(args) -> None:
 
             bs = gt.shape[0]
 
-            # JLP - get text encodings and text_lens on the fly (using char level)
-            txt_encs=[]
-            txt_lens=[]
-            for i in range(bs):
-                txt = text[i]
-                txt_lens.append(len(txt))
-                # print(f'text: ', txt)
-                txt_enc = encode(txt)
-                # print(f'encoded text: ', txt_enc)
-                # print('decoded txt: ', decode(txt_enc))
-                txt_encs.append(torch.tensor(txt_enc))
-            txt_encs = torch.stack(txt_encs)
-            txt_lens = torch.tensor(txt_lens)
-
-            # JLP - re organize bbox format 
-            xs, ys, ws, hs = bbox[0], bbox[1], bbox[2], bbox[3] 
-            boxes = []
-            for i in range(bs):
-                # scale bbox coordinates 512 -> 448
-                x_scale_ratio = 448/512
-                y_scale_ratio = 448/512
-                x, y, w, h = int(xs[i].item() * x_scale_ratio), int(ys[i].item() * y_scale_ratio), int(ws[i].item() * x_scale_ratio), int(hs[i].item() * y_scale_ratio)
-                box = torch.tensor([x, y, x+w, y+h])
-                boxes.append(box)
-            boxes = torch.stack(boxes)  # x1,y1,x2,y2 format
-
-            # # JLP - vis batch data: img, bbox, text
-            # for i in range(bs):
-            #     hr = gt[i]      # 448, 448, 3
-            #     lr = lq[i]
-            #     hr = (hr-hr.min())/(hr.max()-hr.min())*255.0
-            #     lr = (lr-lr.min())/(lr.max()-lr.min())*255.0
-            #     hr = hr.detach().cpu().numpy().astype(np.uint8)
-            #     lr = lr.detach().cpu().numpy().astype(np.uint8)
-            #     hr = hr.copy()
-            #     lr = lr.copy()
-            #     # cv2.imwrite(f'img{i}_hr.jpg', hr[...,::-1])
-            #     # cv2.imwrite(f'img{i}_lr.jpg', lr[...,::-1])]
-            #     box = boxes[i]
-            #     x1, y1, x2, y2 = boxes[i]
-            #     x1, y1, x2, y2 = int(x1.item()), int(y1.item()), int(x2.item()), int(y2.item())
-
-            #     cv2.rectangle(hr, (x1,y1), (x2,y2), color=(0,255,0), thickness=4)
-            #     cv2.rectangle(lr, (x1,y1), (x2,y2), color=(0,255,0), thickness=4)
-            #     cv2.imwrite(f'img{i}_hr_{text[i]}.jpg', hr[...,::-1])
-            #     cv2.imwrite(f'img{i}_lr_{text[i]}.jpg', lr[...,::-1])
-            
             gt = rearrange(gt, "b h w c -> b c h w").contiguous().float()   # b 3 448 448
             lq = rearrange(lq, "b h w c -> b c h w").contiguous().float()   # b 3 448 448
 
@@ -352,125 +219,8 @@ def main(args) -> None:
                 z_t: noise added encoded latent
                 pred_z_0: using model predicted noise, we can obtain pred_z_0
             '''
-            # # JLP - vis importance of amount of noise added, as it can affect pred_x_0 img quality (especially text region)
-            # # which is directly connected to OCR quality
-            # for i in range(0,1000,200):
 
-            #     t = torch.tensor(i).unsqueeze(0).cuda()
-            #     _, pred_z_0, z_t = diffusion.p_losses(cldm, z_0, t, cond_aug)
-            
-            #     x_t = pure_cldm.vae_decode(z_t)
-            #     pred_x_0 = pure_cldm.vae_decode(pred_z_0)        # b 3 448 448
-
-            #     # JLP - crop only the text bbox for recognition
-            #     cropped_imgs=[]
-            #     for i in range(bs):
-            #         img = pred_x_0[i]               # 3 448 448
-            #         x1, y1, x2, y2 = boxes[i]      # x1 y1 x2 y2
-            #         cropped_img = crop(img, y1, x1, y2-y1, x2-x1)   # format: x y w h
-            #         resized_img = F.interpolate(cropped_img.unsqueeze(0), size=(32,128), mode='bilinear', align_corners=False)
-            #         cropped_imgs.append(resized_img)
-            #     cropped_imgs = torch.cat(cropped_imgs)
-
-            #     rec_img = cropped_imgs.cuda()
-            #     target_text = txt_encs.cuda()
-            #     target_len = txt_lens.cuda()
-            #     rec_feat = None
-                
-            #     rec_imgs = (rec_img, target_text, target_len, rec_feat)
-            #     rec_outputs = recognizer(rec_imgs)
-            #     rec_outputs = rec_outputs[0]
-
-            #     print(rec_outputs[:,:4,:7])
-            #     print('')
-            #     print('='*50)
-            #     # # JLP - see pred recognized texts 
-            #     for i in range(bs):
-            #         pred = rec_outputs[i]
-            #         pred_idx = pred.argmax(dim=-1)
-            #         # row_idx = torch.arange(pred.shape[0])
-            #         # tmp2 = pred[row_idx, pred.argmax(dim=-1)]
-            #         pred_word = decode(pred_idx)
-            #         print('GT Word: ', text[i])
-            #         print('Pred Word: ', pred_word)
-            #         print('-'*50)
-
-            #     loss_rec = rec_criterion(rec_outputs, target_text, target_len)
-            #     print('OCR_WEIGHT: ', cfg.pho_args.ocr_loss_weight)
-            #     print(f'loss_ocr_rec: {loss_rec.item():.3f}')
-            #     print(f'loss_diff: {loss.item():.3f}')
-            #     print('='*50)
-
-            #     lq = (lq-lq.min())/(lq.max()-lq.min())
-            #     x_t = (x_t-x_t.min())/(x_t.max()-x_t.min())
-            #     pred_x_0 = (pred_x_0-pred_x_0.min())/(pred_x_0.max()-pred_x_0.min())
-
-            #     # only label bbox for gt img
-            #     gt = (gt-gt.min())/(gt.max()-gt.min())*255.0
-            #     vis_gt = gt.squeeze().permute(1,2,0).detach().cpu().numpy().astype(np.uint8)  # 448 448 3
-            #     vis_gt = vis_gt.copy()
-            #     x1, y1, x2, y2 = boxes[i]
-            #     x1, y1, x2, y2 = int(x1.item()), int(y1.item()), int(x2.item()), int(y2.item())
-            #     cv2.rectangle(vis_gt, (x1,y1), (x2,y2), color=(0,255,0), thickness=4)
-            #     cv2.imwrite(f'./img_gt.jpg', vis_gt[...,::-1])
-            #     vis_gt = torch.tensor(vis_gt)
-            #     vis_gt = vis_gt.cuda().permute(2,0,1).float() / 255.0
-                
-            #     rec_loss = str(round(loss_rec.item(),3))
-            #     log_loss = f"{rec_loss.split('.')[0]}_{rec_loss.split('.')[-1]}"
-
-            #     train_img_all = torch.cat([lq, x_t, pred_x_0, vis_gt.unsqueeze(0)], dim=-1)
-            #     save_image(train_img_all, f'./vis/noisy_imgs/img{global_step}_t{t.item()}_gt{text[0]}_pred{pred_word}_recloss{log_loss}.jpg')
-            #     print('TIMESTEP: ', t)
-
-            pred_x_0 = pure_cldm.vae_decode(pred_z_0)        # b 3 448 448
-
-            # JLP - crop only the text bbox for recognition
-            cropped_imgs=[]
-            for i in range(bs):
-                img = pred_x_0[i]               # 3 448 448
-                x1, y1, x2, y2 = boxes[i]      # x1 y1 x2 y2
-                cropped_img = crop(img, y1, x1, y2-y1, x2-x1)   # format: x y w h
-                resized_img = F.interpolate(cropped_img.unsqueeze(0), size=(32,128), mode='bilinear', align_corners=False)
-                cropped_imgs.append(resized_img)
-            cropped_imgs = torch.cat(cropped_imgs)
-
-            rec_img = cropped_imgs.cuda()
-            target_text = txt_encs.cuda()
-            target_len = txt_lens.cuda()
-            rec_feat = None
-            
-            # Recognizer model
-            rec_imgs = (rec_img, target_text, target_len, rec_feat)
-            rec_outputs = recognizer(rec_imgs)
-            rec_outputs = rec_outputs[0]
-
-            # # JLP - see pred recognized texts 
-            print('')
-            print('='*50)
-            pred_words=[]
-            for i in range(bs):
-                pred = rec_outputs[i]
-                pred_idx = pred.argmax(dim=-1)
-                # row_idx = torch.arange(pred.shape[0])
-                # tmp2 = pred[row_idx, pred.argmax(dim=-1)]
-                pred_word = decode(pred_idx)
-                pred_words.append(pred_word)
-                print('GT Word: ', text[i])
-                print('Pred Word: ', pred_words[i])
-                print('Prompt: ', prompt[i])
-                print('-'*50)
-
-            loss_rec = rec_criterion(rec_outputs, target_text, target_len)
-
-            # TOTAL LOSS
-            total_loss = loss + cfg.pho_args.ocr_loss_weight * loss_rec 
-
-            print(f'OCR_WEIGHT: {cfg.pho_args.ocr_loss_weight}'  )
-            print(f'loss_ocr_rec: {loss_rec.item():.3f}')
-            print(f'loss_ocr_rec_scaled: {cfg.pho_args.ocr_loss_weight * loss_rec.item():.3f}')
-            print(f'loss_diff: {loss.item():.3f}')
-            print('='*50)
+            total_loss = loss
 
             # backward pass
             if global_step > 0:
@@ -480,14 +230,12 @@ def main(args) -> None:
 
             global_step += 1
             step_loss.append(loss.item())
-            # JLP - add additional loss
-            step_ocr_rec_loss.append(loss_rec.item())
             # step_ocr_loss.append(ocr_loss.item())
             step_total_loss.append(total_loss.item())
             epoch_total_loss.append(total_loss.item())
             pbar.update(1)
             pbar.set_description(
-                f"Epoch: {epoch:04d}, Global Step: {global_step:07d}, Loss: {loss.item():.6f}"
+                f"Epoch: {epoch:04d}, Global Step: {global_step:07d}, Loss: {total_loss.item():.6f}"
             )
 
             # Log Training loss
@@ -502,14 +250,6 @@ def main(args) -> None:
                     .item()
                 )
 
-                avg_ocr_rec_loss = (
-                    accelerator.gather(
-                        torch.tensor(step_ocr_rec_loss, device=device).unsqueeze(0)
-                    )
-                    .mean()
-                    .item()
-                )
-
                 avg_total_loss = (
                     accelerator.gather(
                         torch.tensor(step_total_loss, device=device).unsqueeze(0)
@@ -518,14 +258,10 @@ def main(args) -> None:
                     .item()
                 )
                 step_loss.clear()
-                step_ocr_rec_loss.clear()
-                # step_ocr_loss.clear()
                 step_total_loss.clear()
                 
                 if accelerator.is_main_process:
                     wandb.log({"loss/loss_simple_step": avg_loss}, commit=False)
-                    wandb.log({'loss/ocr_rec_loss': avg_ocr_rec_loss}, commit=False)
-                    # wandb.log({"loss/ocr_loss_simple_step": avg_ocr_loss}, commit=False)
                     wandb.log({"loss/total_loss_simple_step": avg_total_loss}, commit=False)
                     
             # Log Validation Loss
@@ -604,33 +340,14 @@ def main(args) -> None:
                             vis_gt = gt[i]              # 3 448 448
                             vis_lq = lq[i]              # 3 448 448
                             vis_clean = clean[i]        # 3 448 448
-                            vis_pred_x0 = pred_x_0[i]   # 3 448 448
 
-                            vis_gt = (vis_gt - vis_gt.min()) / (vis_gt.max()-vis_gt.min()) * 255.0
+                            vis_gt = (vis_gt - vis_gt.min()) / (vis_gt.max()-vis_gt.min())
                             vis_lq = (vis_lq - vis_lq.min()) / (vis_lq.max() - vis_lq.min())
                             vis_clean  = (vis_clean  - vis_clean.min()) / (vis_clean.max() - vis_clean.min())
-                            vis_pred_x0 = (vis_pred_x0 - vis_pred_x0.min()) / (vis_pred_x0.max() - vis_pred_x0.min())
                             vis_sample = (vis_sample - vis_sample.min()) / (vis_sample.max() - vis_sample.min())
 
-                            # only label bbox for gt img
-                            vis_gt = vis_gt.permute(1,2,0).detach().cpu().numpy().astype(np.uint8)  # 448 448 3
-                            vis_gt = vis_gt.copy()
-                            x1, y1, x2, y2 = boxes[i]
-                            x1, y1, x2, y2 = int(x1.item()), int(y1.item()), int(x2.item()), int(y2.item())
-                            cv2.rectangle(vis_gt, (x1,y1), (x2,y2), color=(0,255,0), thickness=4)
-
-                            cv2.putText(vis_gt, str(t[i].item()), (350,380), cv2.FONT_HERSHEY_SIMPLEX, 0.3, (255,0,0), 1, cv2.LINE_AA)
-                            cv2.putText(vis_gt, text[i], (350,400), cv2.FONT_HERSHEY_SIMPLEX, 0.3, (255,0,0), 1, cv2.LINE_AA)
-                            cv2.putText(vis_gt, pred_words[i], (350,420), cv2.FONT_HERSHEY_SIMPLEX, 0.3, (255,0,0), 1, cv2.LINE_AA)
-                            cv2.putText(vis_gt, str(round(loss_rec.item(),3)), (350,440), cv2.FONT_HERSHEY_SIMPLEX, 0.3, (255,0,0), 1, cv2.LINE_AA)
-                            # cv2.imwrite(f'text.jpg', vis_gt[...,::-1])
-                            vis_gt = torch.tensor(vis_gt)
-                            vis_gt = vis_gt.cuda().permute(2,0,1).float() / 255.0
-
-                            train_img_all = torch.cat([vis_lq, vis_clean, vis_pred_x0, vis_sample, vis_gt], dim=-1)
-                            wandb.log({f'vis_train/train_img_all_{i}':wandb.Image(train_img_all, caption=f'lq_clean_predx0_sample_gt')})
-                            # breakpoint()
-                cldm.train()
+                            train_img_all = torch.cat([vis_lq, vis_clean, vis_sample, vis_gt], dim=-1)
+                            wandb.log({f'vis_train/train_img_all_{i}':wandb.Image(train_img_all, caption=f'lq_clean_sample_gt')})
 
             # log val imgs
             if global_step==1 or (global_step % cfg.val.log_val_img_every == 0 and global_step > 0):
@@ -671,7 +388,6 @@ def main(args) -> None:
                             val_img_all = torch.cat([vis_lq, vis_clean, vis_pred_x0, vis_sample, vis_gt], dim=-1)
                             wandb.log({f'vis_val/val_img_all_{i}':wandb.Image(val_img_all, caption=f'lq_clean_predx0_sample_gt')})
 
-                cldm.train()
             
             if accelerator.is_main_process:
                 wandb.log({"step": global_step}, commit=True)
