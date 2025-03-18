@@ -150,7 +150,7 @@ class TransformerPureDetector(nn.Module):
             sampling_ratio=2,
             pooler_type="ROIAlignV2",
         )
-        checkpoint = torch.load("DiG/checkpoint-9.pth", map_location='cpu')
+        checkpoint = torch.load("./pretrained_weights/checkpoint-9.pth", map_location='cpu')
         self.recognizer.load_state_dict(checkpoint["model"], False)
         
         for name, p in self.recognizer.named_parameters():

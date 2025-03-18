@@ -134,7 +134,7 @@ class TransformerDetector(nn.Module):
         self.testr = TESTR(cfg, backbone)
         
         self.recognizer = RecModel(cfg)
-        checkpoint = torch.load("DiG/checkpoint-9.pth", map_location='cpu')
+        checkpoint = torch.load("./pretrained_weights/checkpoint-9.pth", map_location='cpu')
         self.recognizer.load_state_dict(checkpoint["model"], False)
 
         for name, p in self.testr.named_parameters():
