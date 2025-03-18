@@ -9,3 +9,5 @@ exp/**
 vis/**
 wandb/** 
 
+send_data_weight.sh
+
