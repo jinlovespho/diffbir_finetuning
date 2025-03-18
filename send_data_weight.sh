@@ -1,0 +1,2 @@
+scp -r ./generated_data cvlab08@163.152.163.126:/home/cvlab08/projects/data/jinlovespho/nips25/github/diffbir_finetuning
+scp -r ./pretrained_weights cvlab08@163.152.163.126:/home/cvlab08/projects/data/jinlovespho/nips25/github/diffbir_finetuning
