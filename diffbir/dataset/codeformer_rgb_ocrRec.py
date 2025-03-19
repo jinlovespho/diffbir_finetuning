@@ -184,6 +184,7 @@ class CodeformerDataset(data.Dataset):
         # prompt = text
         if self.pho_use_prompt:
             prompt = f'A high-quality photo containing the word {text}'
+            # prompt = text
         else:
             prompt=''
 

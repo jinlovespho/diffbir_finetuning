@@ -165,10 +165,10 @@ train_settings:
 
 pho_args:
   model: DiffBIR_rgb_ocrRec
-  ocr_loss_weight: 0.001
-  finetuning_method: FT_ctrlnet
+  ocr_loss_weight: 0.005
+  finetuning_method: FT_ctrlnet_unet_attn
 
 wandb_args:
   wandb_key: e32eed0c2509bf898b850b0065ab62345005fb73
-  wandb_exp_name: pho_server5_gpu1_DiffBIR_rgb_ocrRec_FTctrlnet_bs1_lr1e-5_ocrWeight0.001_prompt
+  wandb_exp_name: pho_server5_gpu0_DiffBIR_rgb_ocrRec_FTctrlnet_unetAttn_bs1_lr1e-5_ocrWeight0.005_prompt
 

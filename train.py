@@ -158,6 +158,14 @@ def main(args) -> None:
                 param.requires_grad = True
             else:
                 param.requires_grad = False
+        
+        elif cfg.pho_args.finetuning_method == 'FT_ctrlnet_unet_attn':
+            if 'controlnet' in name:
+                param.requires_grad = True
+            elif 'attn' in name:
+                param.requires_grad = True
+            else:
+                param.requires_grad = False
 
         else:
             raise Exception('FINE-TUNING METHOD IS NOT SET !!')
