@@ -74,7 +74,6 @@ def encode(rec):
     return s
 
 
-
 def main(args) -> None:
     # Setup accelerator:
     accelerator = Accelerator(split_batches=True)
@@ -82,7 +81,6 @@ def main(args) -> None:
     device = accelerator.device
     cfg = OmegaConf.load(args.config)
     
-    # torch.cuda.set_device(1)
     # Setup an experiment folder:
     if accelerator.is_main_process:
         exp_dir = cfg.train.exp_dir
@@ -102,123 +100,61 @@ def main(args) -> None:
             f"missing weights: {missing}"
         )
 
-    # Start From Here for finetuning with OCR
-    if cfg.train.resume: 
-        # load only controlnet weights 
-        # actually diffbir only tuned controlnet weights 
-        cldm.load_controlnet_from_ckpt(torch.load(cfg.train.resume, map_location="cpu"))
-        if accelerator.is_main_process:
-            print(
-                f"strictly load controlnet weight from checkpoint: {cfg.train.resume}"
-            )
-    else:
-        init_with_new_zero, init_with_scratch = cldm.load_controlnet_from_unet()
-        if accelerator.is_main_process:
-            print(
-                f"strictly load controlnet weight from pretrained SD\n"
-                f"weights initialized with newly added zeros: {init_with_new_zero}\n"
-                f"weights initialized from scratch: {init_with_scratch}"
-            )
-
-    swinir: SwinIR = instantiate_from_config(cfg.model.swinir)
-    sd = torch.load(cfg.train.swinir_path, map_location="cpu")
-    if "state_dict" in sd:
-        sd = sd["state_dict"]
-    sd = {
-        (k[len("module.") :] if k.startswith("module.") else k): v
-        for k, v in sd.items()
-    }
-    swinir.load_state_dict(sd, strict=True)
-    for p in swinir.parameters():
-        p.requires_grad = False
-    if accelerator.is_main_process:
-        print(f"load SwinIR from {cfg.train.swinir_path}")
-
     diffusion: Diffusion = instantiate_from_config(cfg.model.diffusion)
 
     # set trainable parameters
     model_names=[]
     for name, param in cldm.named_parameters():
         model_names.append(name)
+        # freeze all params
+        param.requires_grad = False
 
-        if cfg.pho_args.finetuning_method == 'FFT':
-            param.requires_grad = True 
+    # set recognizer
+    from adet.config import get_cfg
+    def setup(args):
+        """
+        Create configs and perform basic setups.
+        """
+        cfg = get_cfg()
+        cfg.merge_from_file(args.bridge_config)
+        cfg.freeze()
+        return cfg
+    bridge_config = setup(args)
 
+    # JLP - get spotter model
+    from adet.modeling.TESTR import TransformerDetector 
+    bridge_model = TransformerDetector(bridge_config)  
+    # JLP - get only recognizer model from bridge 
+    from DiG.models.model_builder import RecModel
+    recognizer = RecModel(bridge_config)
+    checkpoint = torch.load("./pretrained_weights/checkpoint-9.pth", map_location='cpu')
+    msg=recognizer.load_state_dict(checkpoint["model"], False)
+    recognizer.train()
+    recognizer.to('cuda')
+    print(msg)
 
-        elif cfg.pho_args.finetuning_method == 'FT_stable_diffusion':
-            if 'unet' in name:
-                param.requires_grad = True 
-            else:
-                param.requires_grad = False
+    for param in recognizer.parameters():
+        param.requires_grad=True
 
-
-        elif cfg.pho_args.finetuning_method == 'FT_ctrlnet':
-            if 'controlnet' in name:
-                param.requires_grad = True
-            else:
-                param.requires_grad = False
-        
-        elif cfg.pho_args.finetuning_method == 'FT_ctrlnet_unet_attn':
-            if 'controlnet' in name:
-                param.requires_grad = True
-            elif 'attn' in name:
-                param.requires_grad = True
-            else:
-                param.requires_grad = False
-
-        else:
-            raise Exception('FINE-TUNING METHOD IS NOT SET !!')
-
-
-    if cfg.pho_args.model == 'DiffBIR_baseline':
-        pass 
-    elif cfg.pho_args.model == 'DiffBIR_rgb_ocrDetRec':
-        pass
-    elif cfg.pho_args.model == 'DiffBIR_rgb_ocrRec':
-        print('MODEL: ', cfg.pho_args.model )
-        from adet.config import get_cfg
-        def setup(args):
-            """
-            Create configs and perform basic setups.
-            """
-            cfg = get_cfg()
-            cfg.merge_from_file(args.bridge_config)
-            cfg.freeze()
-            return cfg
-        bridge_config = setup(args)
-
-        # JLP - get spotter model
-        from adet.modeling.TESTR import TransformerDetector 
-        bridge_model = TransformerDetector(bridge_config)  
-        # JLP - get only recognizer model from bridge 
-        from DiG.models.model_builder import RecModel
-        recognizer = RecModel(bridge_config)
-        checkpoint = torch.load("./pretrained_weights/checkpoint-9.pth", map_location='cpu')
-        msg=recognizer.load_state_dict(checkpoint["model"], False)
-        recognizer.to('cuda')
-        print(msg)
-
-        for param in recognizer.parameters():
-            param.requires_grad=False
-
-        # JLP - criterion for recognizer
-        from DiG.loss import SeqCrossEntropyLoss
-        rec_criterion = SeqCrossEntropyLoss()
-    else:
-        raise Exception('MODEL IS NOT SET !!')
-
+    # JLP - criterion for recognizer
+    from DiG.loss import SeqCrossEntropyLoss
+    rec_criterion = SeqCrossEntropyLoss()
+  
     # Setup optimizer:
     # params_to_optimize = [
-    #     {"params": cldm.controlnet.parameters(), "lr": cfg.train_settings.learning_rate},
+    #     {"params": recognizer.parameters(), "lr": cfg.train_settings.learning_rate},
     #     {"params": unet_params, "lr": cfg.train_settings.learning_rate},
     # ]
     # opt = torch.optim.AdamW(params_to_optimize, lr=cfg.train_settings.learning_rate)
-    opt = torch.optim.AdamW(filter(lambda p: p.requires_grad, cldm.parameters()), lr=cfg.train_settings.learning_rate)
+
+    opt = torch.optim.AdamW(filter(lambda p: p.requires_grad, recognizer.parameters()), lr=cfg.train_settings.learning_rate)
 
     torch.manual_seed(42)
     # Setup data:
     train_set = instantiate_from_config(cfg.dataset.train)
     val_set = instantiate_from_config(cfg.dataset.val)
+
+    from diffbir.dataset.codeformer_rgb_ocrRec import collate_fn 
     train_loader = DataLoader(
         dataset=train_set,
         batch_size=cfg.train_settings.train_batch_size,
@@ -226,6 +162,7 @@ def main(args) -> None:
         shuffle=True,
         drop_last=True,
         pin_memory=True,
+        collate_fn=collate_fn
     )
     val_loader = DataLoader(
         dataset=val_set,
@@ -234,6 +171,7 @@ def main(args) -> None:
         shuffle=False,
         drop_last=True,
         pin_memory=True,
+        collate_fn=collate_fn
     )
     if accelerator.is_main_process:
         print(f"Training Dataset contains {len(train_set):,} images")
@@ -246,7 +184,6 @@ def main(args) -> None:
     
     # Prepare models for training:
     cldm.train().to(device)
-    swinir.eval().to(device)
     diffusion.to(device)
     # cldm, opt, train_loader, val_loader, internvl = accelerator.prepare(cldm, opt, train_loader, val_loader, internvl)
     cldm, opt, train_loader, val_loader = accelerator.prepare(cldm, opt, train_loader, val_loader)
@@ -283,35 +220,89 @@ def main(args) -> None:
             to(batch, device)
             batch = batch_transform(batch)
             gt, lq, prompt, text, bbox, img_name = batch
+            
+
+
+            # JLP
+            img = gt[-1] # 512 512 3 
+            img = (img-img.min())/(img.max()-img.min())*255.0
+            img = img.detach().cpu().numpy()
+            box = bbox[-1]
+
+            for bx in box:
+                x,y,w,h = bx
+
+                cv2.rectangle(img, (x,y), (x+w,y+h), (0,255,0), 2)
+                cv2.imwrite('./wow.jpg', img)
+                breakpoint()
+
+
+
+
+
+
+
+
 
             bs = gt.shape[0]
 
             # JLP - get text encodings and text_lens on the fly (using char level)
-            txt_encs=[]
-            txt_lens=[]
+            batch_txt_encs=[]
+            batch_txt_lens=[]
             for i in range(bs):
-                txt = text[i]
-                txt_lens.append(len(txt))
-                # print(f'text: ', txt)
-                txt_enc = encode(txt)
-                # print(f'encoded text: ', txt_enc)
-                # print('decoded txt: ', decode(txt_enc))
-                txt_encs.append(torch.tensor(txt_enc))
-            txt_encs = torch.stack(txt_encs)
-            txt_lens = torch.tensor(txt_lens)
 
-            # JLP - re organize bbox format 
-            xs, ys, ws, hs = bbox[0], bbox[1], bbox[2], bbox[3] 
-            boxes = []
+                list_of_txts = text[i]
+                img_txt_encs=[]
+                img_txt_lens=[]
+
+                for txt in list_of_txts:
+                    img_txt_lens.append(len(txt))
+                    txt_enc = encode(txt)
+                    img_txt_encs.append(torch.tensor(txt_enc))
+                    # print(f'text: ', txt)
+                    # print(f'encoded text: ', txt_enc)
+                    # print('decoded txt: ', decode(txt_enc))
+                batch_txt_encs.append(torch.stack(img_txt_encs))
+                batch_txt_lens.append(torch.tensor(img_txt_lens))
+            # batch_txt_encs = torch.stack(batch_txt_encs)      # batch_txt_encs 가 길이가 다 달라서 stack이 안돼, ex. batch_txt_encs[0]: (48,25), batch_txt_encs[1]: (2,25)
+            # batch_txt_lens = torch.stack(batch_txt_lens)
+
+            batch_boxes=[]
             for i in range(bs):
-                # scale bbox coordinates 512 -> 448
-                x_scale_ratio = 448/512
-                y_scale_ratio = 448/512
-                x, y, w, h = int(xs[i].item() * x_scale_ratio), int(ys[i].item() * y_scale_ratio), int(ws[i].item() * x_scale_ratio), int(hs[i].item() * y_scale_ratio)
-                box = torch.tensor([x, y, x+w, y+h])
-                boxes.append(box)
-            boxes = torch.stack(boxes)  # x1,y1,x2,y2 format
 
+                list_of_boxes = bbox[i]
+                img_boxes=[]
+
+                for box in list_of_boxes:
+                    # scale bbox coordinates 512 -> 448
+                    x_scale_ratio = 448/512
+                    y_scale_ratio = 448/512
+                    x,y,w,h = int(box[0]*x_scale_ratio), int(box[1]*y_scale_ratio), int(box[2]*x_scale_ratio), int(box[3]*y_scale_ratio)
+                    box = torch.tensor([x, y, x+w, y+h])    # xyxy format
+                    img_boxes.append(box)
+                batch_boxes.append(torch.stack(img_boxes))
+
+            breakpoint()
+
+            
+            gt = gt.permute(0,3,1,2)
+            gt = F.interpolate(gt, (448,448), mode='bilinear', align_corners=True)
+            # JLP - data vis
+            img=gt[1]
+            img = img.permute(1,2,0)
+            img = (img-img.min())/(img.max()-img.min())*255.0
+            img = img.detach().cpu().numpy()
+            text = batch_txt_encs[-1]
+            box = batch_boxes[-1]
+            print('decoded txt: ', decode(text[1]))
+
+            for i in range(len(box)):
+                tmp_box=box[i]
+                x,y,w,h = map(int,tmp_box)
+                cv2.rectangle(img, (x,y),(w,h), (0,255,0), 2)
+
+            cv2.imwrite('./tmp.jpg', img[:,:,::-1])
+            breakpoint()
             # # JLP - vis batch data: img, bbox, text
             # for i in range(bs):
             #     hr = gt[i]      # 448, 448, 3

@@ -987,6 +987,11 @@ class ModelMixin(torch.nn.Module, PushToHubMixin):
         # no in-place modification of the original config.
         config = copy.deepcopy(config)
 
+        # JLP 
+        if config['_class_name'] == 'UNet2DConditionModel':
+            config['model_args'] = kwargs['model_args']
+
+
         # determine initial quantization config.
         #######################################
         pre_quantized = "quantization_config" in config and config["quantization_config"] is not None

@@ -19,6 +19,7 @@ from ..utils.common import instantiate_from_config
 
 import cv2 
 import string
+import torch 
 
 import sys
 import pdb
@@ -91,13 +92,16 @@ class CodeformerDataset(data.Dataset):
         downsample_range: Sequence[float],
         noise_range: Sequence[float],
         jpeg_range: Sequence[int],
-        pho_use_prompt=None,
+        pho_data_args=None,
         mode = 'train',
     ) -> "CodeformerDataset":
         super(CodeformerDataset, self).__init__()
-        # breakpoint()
+
+        # JLP 
+        self.pho_data_args = pho_data_args
+
         self.file_list = file_list
-        self.image_files = load_pair_list(file_list, mode)
+        self.image_files = load_pair_list(file_list, mode, self.pho_data_args)
         self.file_backend = instantiate_from_config(file_backend_cfg)
         self.out_size = out_size
         self.crop_type = crop_type
@@ -110,9 +114,6 @@ class CodeformerDataset(data.Dataset):
         self.downsample_range = downsample_range
         self.noise_range = noise_range
         self.jpeg_range = jpeg_range
-
-        # JLP 
-        self.pho_use_prompt=pho_use_prompt
 
         # # JLP - vis training dataset image, bbox, and text
         # for i in range(15):
@@ -127,9 +128,6 @@ class CodeformerDataset(data.Dataset):
         #     cv2.rectangle(img, (x,y), (x+w,y+h) , color= (0,255,0), thickness=2)
         #     cv2.imwrite(f'./vis/{dataset_name}_{img_name}_{txt}.jpg', img)
 
-        # JLP - set len images to 300
-        self.image_files.pop()
-    
     def load_gt_image(
         self, image_path: str, max_retry: int = 5
     ) -> Optional[np.ndarray]:
@@ -180,14 +178,6 @@ class CodeformerDataset(data.Dataset):
         img_lq = (img_lq[..., ::-1] / 255.0).astype(np.float32)
         h, w, _ = img_gt.shape
 
-        # JLP
-        # prompt = text
-        if self.pho_use_prompt:
-            prompt = f'A high-quality photo containing the word {text}'
-            # prompt = text
-        else:
-            prompt=''
-
         # BGR to RGB, [-1, 1]
         gt = (img_gt[..., ::-1] * 2 - 1).astype(np.float32)
         # BGR to RGB, [0, 1]
@@ -196,7 +186,19 @@ class CodeformerDataset(data.Dataset):
         # JLP - added ocr tokenizer which is pretty much just char level encoding
         # text_enc = encode(text)
 
+        # ForkedPdb().set_trace()
+
         return gt, lq, prompt, text, bbox, img_name
 
     def __len__(self) -> int:
         return len(self.image_files)
+
+# PHO - LOL.. this solves it! :)
+def collate_fn(batch):
+    gt, lq, prompt, text, bbox, img_name = zip(*batch)
+
+    # Convert lists to tensors if possible
+    gt = torch.stack([torch.tensor(x) for x in gt])
+    lq = torch.stack([torch.tensor(x) for x in lq])
+    
+    return gt, lq, list(prompt), list(text), list(bbox), list(img_name)

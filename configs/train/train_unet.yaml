@@ -101,8 +101,8 @@ dataset:
       file_list: ./generated_data
       file_backend_cfg:
         target: diffbir.dataset.file_backend.HardDiskBackend
-      out_size: 448
-      crop_type: center
+      out_size: 512
+      crop_type: none
       blur_kernel_size: 41
       kernel_list: ['iso', 'aniso']
       kernel_prob: [0.5, 0.5]
@@ -110,7 +110,7 @@ dataset:
       downsample_range: [1, 12]
       noise_range: [0, 15]
       jpeg_range: [30, 100]
-      pho_data_args: {'data':['lsdir', 'realsr','TextOCR'], 'ann_path':'./generated_data/ocr', 'use_prompt':False}
+      pho_data_args: {'data':['TextOCR'], 'ann_path':'./generated_data/ocr', 'use_prompt':False}
   val:
     target: diffbir.dataset.codeformer_rgb_ocrRec.CodeformerDataset
     params:
@@ -118,8 +118,8 @@ dataset:
       file_list: ./generated_data
       file_backend_cfg:
         target: diffbir.dataset.file_backend.HardDiskBackend
-      out_size: 448
-      crop_type: center
+      out_size: 512
+      crop_type: none
       blur_kernel_size: 41
       kernel_list: ['iso', 'aniso']
       kernel_prob: [0.5, 0.5]
@@ -127,7 +127,7 @@ dataset:
       downsample_range: [1, 12]
       noise_range: [0, 15]
       jpeg_range: [30, 100]
-      pho_data_args: {'data':['lsdir', 'realsr','TextOCR'], 'ann_path':'./generated_data/ocr', 'use_prompt':False}
+      pho_data_args: {'data':['TextOCR'], 'ann_path':'./generated_data/ocr', 'use_prompt':False}
       mode: val
 batch_transform:
   target: diffbir.dataset.batch_transform.IdentityBatchTransform
@@ -159,7 +159,7 @@ val:
   log_val_img_every: 100
 
 train_settings:
-  train_batch_size: 1
+  train_batch_size: 4
   learning_rate: 1e-5
   train_steps: 8000
 
@@ -170,5 +170,5 @@ pho_args:
 
 wandb_args:
   wandb_key: e32eed0c2509bf898b850b0065ab62345005fb73
-  wandb_exp_name: pho_server5_gpu3_DiffBIR_rgb_ocrRec_FTctrlnet_unetAttn_bs1_lr1e-5_ocrWeight0.001
+  wandb_exp_name: pho_server5_gpu3_Unet_FTrecognizer_bs1_lr1e-5_ocrWeight0.001
 

@@ -51,6 +51,11 @@ from diffusers.utils.hub_utils import load_or_create_model_card, populate_model_
 from diffusers.utils.import_utils import is_xformers_available
 from diffusers.utils.torch_utils import is_compiled_module
 
+# JLP 
+from custom_dataset import load_custom_dataset  
+from torchvision.utils import save_image 
+import cv2 
+
 
 if is_wandb_available():
     import wandb
@@ -500,6 +505,15 @@ def parse_args():
         ),
     )
 
+
+    # JLP args
+    parser.add_argument('--wandb_proj_name', type=str)
+    parser.add_argument('--wandb_exp_name',  type=str)
+
+
+
+
+
     args = parser.parse_args()
     env_local_rank = int(os.environ.get("LOCAL_RANK", -1))
     if env_local_rank != -1 and env_local_rank != args.local_rank:
@@ -579,6 +593,10 @@ def main():
                 repo_id=args.hub_model_id or Path(args.output_dir).name, exist_ok=True, token=args.hub_token
             ).repo_id
 
+        # JLP logging
+        if args.report_to == 'wandb':
+            wandb.init(project=args.wandb_proj_name, name=args.wandb_exp_name, config=vars(args))
+
     # Load scheduler, tokenizer and models.
     noise_scheduler = DDPMScheduler.from_pretrained(args.pretrained_model_name_or_path, subfolder="scheduler")
     tokenizer = CLIPTokenizer.from_pretrained(
@@ -613,7 +631,7 @@ def main():
         )
 
     unet = UNet2DConditionModel.from_pretrained(
-        args.pretrained_model_name_or_path, subfolder="unet", revision=args.non_ema_revision
+        args.pretrained_model_name_or_path, subfolder="unet", revision=args.non_ema_revision, model_args=args
     )
 
     # Freeze vae and text_encoder and set unet to trainable
@@ -720,6 +738,17 @@ def main():
         eps=args.adam_epsilon,
     )
 
+    # JLP - load data 
+    # train_ann = load_dataset('json', data_files='./generated_data/ocr/train_dataset_modified_filtered.json')
+    # val_ann = load_dataset('json', data_files='./generated_data/ocr/val_dataset_modified_filtered.json')
+    # train_ds = load_dataset('imagefolder', data_dir='./generated_data/TextOCR/train', split='train')
+    # val_ds = load_dataset('imagefolder', data_dir='./generated_data/TextOCR/val', split='val')
+  
+    # Jaewon load data
+    data_path = './generated_data'
+    train_ds = load_custom_dataset(path=data_path, split='train')
+    val_ds = load_custom_dataset(path=data_path, split='val')
+
     # Get the datasets: you can either provide your own training and evaluation files (see below)
     # or specify a Dataset from the hub (the dataset will be downloaded automatically from the datasets Hub).
 
@@ -753,7 +782,7 @@ def main():
     dataset_columns = DATASET_NAME_MAPPING.get(args.dataset_name, None)
     if args.image_column is None:
         image_column = dataset_columns[0] if dataset_columns is not None else column_names[0]
-    else:
+    else:   # t
         image_column = args.image_column
         if image_column not in column_names:
             raise ValueError(
@@ -771,13 +800,24 @@ def main():
     # Preprocessing the datasets.
     # We need to tokenize input captions and transform the images.
     def tokenize_captions(examples, is_train=True):
+        # breakpoint()
         captions = []
         for caption in examples[caption_column]:
             if isinstance(caption, str):
                 captions.append(caption)
             elif isinstance(caption, (list, np.ndarray)):
+
                 # take a random caption if there are multiple
-                captions.append(random.choice(caption) if is_train else caption[0])
+                # captions.append(random.choice(caption) if is_train else caption[0])
+
+                # JLP - put all texts in a single prompt
+                caption = [f'"{text}"' for text in caption]
+                prompt = f"A high-quality photo containing the word {', '.join(caption) }."
+                print('Prompt: ', prompt)
+                captions.append(prompt)
+                
+                # JLP - multiple captions
+                # captions.extend(caption)
             else:
                 raise ValueError(
                     f"Caption column `{caption_column}` should contain either strings or lists of strings."
@@ -785,40 +825,79 @@ def main():
         inputs = tokenizer(
             captions, max_length=tokenizer.model_max_length, padding="max_length", truncation=True, return_tensors="pt"
         )
-        return inputs.input_ids
+        return captions, inputs.input_ids
 
     # Preprocessing the datasets.
     train_transforms = transforms.Compose(
         [
             transforms.Resize(args.resolution, interpolation=transforms.InterpolationMode.BILINEAR),
-            transforms.CenterCrop(args.resolution) if args.center_crop else transforms.RandomCrop(args.resolution),
-            transforms.RandomHorizontalFlip() if args.random_flip else transforms.Lambda(lambda x: x),
-            transforms.ToTensor(),
-            transforms.Normalize([0.5], [0.5]),
+            # transforms.CenterCrop(args.resolution) if args.center_crop else transforms.RandomCrop(args.resolution),
+            # transforms.RandomHorizontalFlip() if args.random_flip else transforms.Lambda(lambda x: x),
+            transforms.ToTensor(),              # normalize to [0,1]
+            transforms.Normalize([0.5], [0.5]), # normalize to [-1,1]
         ]
     )
 
     def preprocess_train(examples):
+        # breakpoint()
+        # process image 
         images = [image.convert("RGB") for image in examples[image_column]]
-        examples["pixel_values"] = [train_transforms(image) for image in images]
-        examples["input_ids"] = tokenize_captions(examples)
+        examples["pixel_values"] = [train_transforms(image) for image in images]    # [img0, img1, . . ]
+        # process texts (put all texts in a single prompt)
+        captions, input_ids = tokenize_captions(examples)     # b 77
+        examples['captions'] = captions
+        examples["input_ids"] = input_ids
         return examples
 
     with accelerator.main_process_first():
-        if args.max_train_samples is not None:
+        if args.max_train_samples is not None:   # for debugging purpose, look at parser help 
             dataset["train"] = dataset["train"].shuffle(seed=args.seed).select(range(args.max_train_samples))
         # Set the training transforms
-        train_dataset = dataset["train"].with_transform(preprocess_train)
+        train_dataset = dataset["train"].with_transform(preprocess_train)   # this is applied right before __getitem__
+        # JLP - process our data 
+        train_ds = train_ds['train'].with_transform(preprocess_train) 
+        val_ds = val_ds['val'].with_transform(preprocess_train) 
 
+    # train_dataset[0].keys(): ['image', 'text', 'pixel_values', 'input_ids']
+    # train_ds[0].keys()     : ['image', 'text', 'bbox', 'prompt', 'pixel_values', 'input_ids']
+
+    # The actual values that are being returned from loaders
+    # 여기서 batch로 쌓아서 다 넘겨주네
     def collate_fn(examples):
-        pixel_values = torch.stack([example["pixel_values"] for example in examples])
-        pixel_values = pixel_values.to(memory_format=torch.contiguous_format).float()
-        input_ids = torch.stack([example["input_ids"] for example in examples])
-        return {"pixel_values": pixel_values, "input_ids": input_ids}
+        # examples = [sample0, sample1, ... ] 꼴로 리스트로 담겨있어
+        # where, sample0.keys(): ['image', 'text', ... ]
+
+        bs = len(examples)
+        all_boxes=[]
+        all_texts=[]
+        all_enc_texts=[]
+        all_prompts=[]
+        num_box_per_img = []
+        for i in range(bs):
+            boxes = examples[i]['bbox']
+            texts = examples[i]['text']
+            assert len(boxes) == len(texts), 'JLP - check number of boxes and texts'
+
+            # add box
+            all_boxes.append(boxes)
+            # add text
+            all_texts.append(texts)
+            # add encoded text
+            encoded_all_texts = tokenizer(texts, max_length=tokenizer.model_max_length, padding="max_length", truncation=True, return_tensors="pt")
+            all_enc_texts.append(encoded_all_texts.input_ids)
+            # add captions
+            all_prompts.append(examples[i]['captions'])
+
+        pixel_values = torch.stack([example["pixel_values"] for example in examples])       # b 3 512 512 
+        pixel_values = pixel_values.to(memory_format=torch.contiguous_format).float()   
+        input_ids = torch.stack([example["input_ids"] for example in examples])             # b 77
+
+        # 즉 여기서 최종 batch형태로 다 쌓아주고 return
+        return {"pixel_values": pixel_values, "input_ids": input_ids, 'boxes': all_boxes, 'texts': all_texts, 'prompts': all_prompts}
 
     # DataLoaders creation:
     train_dataloader = torch.utils.data.DataLoader(
-        train_dataset,
+        train_ds,
         shuffle=True,
         collate_fn=collate_fn,
         batch_size=args.train_batch_size,
@@ -948,58 +1027,53 @@ def main():
         train_loss = 0.0
         for step, batch in enumerate(train_dataloader):
             with accelerator.accumulate(unet):
+
+                # # JLP - VISUALIZE BATCH IMG AND BBOX
+                # for i in range(train_dataloader.total_batch_size):
+                #     img = batch['pixel_values'][i]
+                #     boxes = batch['boxes'][i]
+                #     texts = batch['texts'][i]
+                #     img = (img+1)/2 * 255.0 
+                #     img = img.permute(1,2,0).detach().cpu().numpy()
+                #     img=img.copy()
+                #     for j in range(len(boxes)):
+                #         x, y, w, h = boxes[j]
+                #         text = texts[j]
+                #         cv2.rectangle(img, (x,y), (x+w,y+h), (0,255,0), 2)
+                #         cv2.putText(img, text, (x,y), 0, 0.5, (0,255,0), 1)
+                #     cv2.imwrite(f'./img{i}.jpg', img[:,:,::-1])
+
                 # Convert images to latent space
-                latents = vae.encode(batch["pixel_values"].to(weight_dtype)).latent_dist.sample()
+                latents = vae.encode(batch["pixel_values"].to(weight_dtype)).latent_dist.sample()   # z_0: b 4 64 64 
                 latents = latents * vae.config.scaling_factor
 
                 # Sample noise that we'll add to the latents
-                noise = torch.randn_like(latents)
-                if args.noise_offset:
-                    # https://www.crosslabs.org//blog/diffusion-with-offset-noise
-                    noise += args.noise_offset * torch.randn(
-                        (latents.shape[0], latents.shape[1], 1, 1), device=latents.device
-                    )
-                if args.input_perturbation:
-                    new_noise = noise + args.input_perturbation * torch.randn_like(noise)
+                noise = torch.randn_like(latents)   # b 4 64 64
                 bsz = latents.shape[0]
                 # Sample a random timestep for each image
-                timesteps = torch.randint(0, noise_scheduler.config.num_train_timesteps, (bsz,), device=latents.device)
+                timesteps = torch.randint(0, noise_scheduler.config.num_train_timesteps, (bsz,), device=latents.device) # sample from 0~1000 for training
                 timesteps = timesteps.long()
 
                 # Add noise to the latents according to the noise magnitude at each timestep
                 # (this is the forward diffusion process)
-                if args.input_perturbation:
-                    noisy_latents = noise_scheduler.add_noise(latents, new_noise, timesteps)
-                else:
-                    noisy_latents = noise_scheduler.add_noise(latents, noise, timesteps)
+                noisy_latents = noise_scheduler.add_noise(latents, noise, timesteps)    # z_t: b 4 64 64 
 
                 # Get the text embedding for conditioning
-                encoder_hidden_states = text_encoder(batch["input_ids"], return_dict=False)[0]
+                encoder_hidden_states = text_encoder(batch["input_ids"], return_dict=False)[0]  # b 77 1024
 
                 # Get the target for loss depending on the prediction type
                 if args.prediction_type is not None:
                     # set prediction_type of scheduler if defined
                     noise_scheduler.register_to_config(prediction_type=args.prediction_type)
 
-                if noise_scheduler.config.prediction_type == "epsilon":
+                if noise_scheduler.config.prediction_type == "epsilon": # t
                     target = noise
-                elif noise_scheduler.config.prediction_type == "v_prediction":
+                elif noise_scheduler.config.prediction_type == "v_prediction":  # f
                     target = noise_scheduler.get_velocity(latents, noise, timesteps)
                 else:
                     raise ValueError(f"Unknown prediction type {noise_scheduler.config.prediction_type}")
 
-                if args.dream_training:
-                    noisy_latents, target = compute_dream_and_update_latents(
-                        unet,
-                        noise_scheduler,
-                        timesteps,
-                        noise,
-                        noisy_latents,
-                        target,
-                        encoder_hidden_states,
-                        args.dream_detail_preservation,
-                    )
-
+                # breakpoint()
                 # Predict the noise residual and compute loss
                 model_pred = unet(noisy_latents, timesteps, encoder_hidden_states, return_dict=False)[0]
 
@@ -1136,15 +1210,6 @@ def main():
                 with torch.autocast("cuda"):
                     image = pipeline(args.validation_prompts[i], num_inference_steps=20, generator=generator).images[0]
                 images.append(image)
-
-        if args.push_to_hub:
-            save_model_card(args, repo_id, images, repo_folder=args.output_dir)
-            upload_folder(
-                repo_id=repo_id,
-                folder_path=args.output_dir,
-                commit_message="End of training",
-                ignore_patterns=["step_*", "epoch_*"],
-            )
 
     accelerator.end_training()
 

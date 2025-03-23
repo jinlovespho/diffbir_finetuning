@@ -2,6 +2,8 @@
 
 *.pth 
 *.pt 
+*.jpg
+*.png
 
 generated_data/**
 pretrained_weights/**

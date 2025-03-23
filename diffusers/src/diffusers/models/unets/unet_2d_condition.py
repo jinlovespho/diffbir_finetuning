@@ -224,8 +224,12 @@ class UNet2DConditionModel(
         mid_block_only_cross_attention: Optional[bool] = None,
         cross_attention_norm: Optional[str] = None,
         addition_embed_type_num_heads: int = 64,
+        model_args=None
     ):
         super().__init__()
+
+        # JLP 
+        self.model_args = model_args 
 
         self.sample_size = sample_size
 
@@ -1227,7 +1231,11 @@ class UNet2DConditionModel(
 
             down_block_res_samples += res_samples
 
-        if is_controlnet:
+        # down_block_res_samples: (1st_feature, 2nd_feature, . . . last_feature)   # features are added this way.
+        # where sample is the last feature 
+        # torch.equal(sample, down_block_res_samples[-1]) -> True
+
+        if is_controlnet:   # f
             new_down_block_res_samples = ()
 
             for down_block_res_sample, down_block_additional_residual in zip(
@@ -1239,8 +1247,8 @@ class UNet2DConditionModel(
             down_block_res_samples = new_down_block_res_samples
 
         # 4. mid
-        if self.mid_block is not None:
-            if hasattr(self.mid_block, "has_cross_attention") and self.mid_block.has_cross_attention:
+        if self.mid_block is not None:  # t
+            if hasattr(self.mid_block, "has_cross_attention") and self.mid_block.has_cross_attention:   # t
                 sample = self.mid_block(
                     sample,
                     emb,
@@ -1249,7 +1257,7 @@ class UNet2DConditionModel(
                     cross_attention_kwargs=cross_attention_kwargs,
                     encoder_attention_mask=encoder_attention_mask,
                 )
-            else:
+            else:   # f
                 sample = self.mid_block(sample, emb)
 
             # To support T2I-Adapter-XL
@@ -1263,11 +1271,12 @@ class UNet2DConditionModel(
         if is_controlnet:
             sample = sample + mid_block_additional_residual
 
+        # breakpoint()
         # 5. up
         for i, upsample_block in enumerate(self.up_blocks):
             is_final_block = i == len(self.up_blocks) - 1
 
-            res_samples = down_block_res_samples[-len(upsample_block.resnets) :]
+            res_samples = down_block_res_samples[-len(upsample_block.resnets) :]    # down_block_res_samples=[f0_0, f0_1, f0_2, . . . f2_0, f2_1, f2_2] 이렇게 있을 때 뒤에서부터 (f2_0, f2_1, f2_2) 를 묶음으로 꺼내오는 것
             down_block_res_samples = down_block_res_samples[: -len(upsample_block.resnets)]
 
             # if we have not reached the final block and need to forward the

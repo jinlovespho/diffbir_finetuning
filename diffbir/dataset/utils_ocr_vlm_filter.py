@@ -22,39 +22,80 @@ def load_file_list(file_list_path: str) -> List[Dict[str, str]]:
                 files.append({"image_path": path, "prompt": ""})
     return files
 
-def load_pair_list(file_list_path: str, mode='train') -> List[Dict[str, str]]:
-    default_data_type = ['lsdir', 'realsr',] # TODO: change to config
-    base_dir = './generated_data/ocr'
+def load_pair_list(file_list_path: str, mode='train', pho_data_args=None) -> List[Dict[str, str]]:
+    # default_data_type = ['lsdir', 'realsr',] # TODO: change to config
+    default_data_type = pho_data_args['data']
+    # base_dir = './generated_data/ocr'
+    base_dir = pho_data_args['ann_path']
     files = []
-    # breakpoint()
     for data_type in default_data_type:
-        if mode == 'val' and data_type == 'drealsr': continue
-        with open(os.path.join(base_dir, f'{data_type}_adjust_label_{mode}.json'), 'r') as f:
-            json_data = json.load(f)
-        for img_path in os.listdir(os.path.join(file_list_path, data_type, mode, 'gt/512')):
-            gt_path = os.path.join(file_list_path, data_type, mode, 'gt/512', img_path)
-            lq_path = os.path.join(file_list_path, data_type, mode, 'image/512', img_path)
-            
-            img_name = img_path.split('.')[0]
-            img_id = '_'.join(img_name.split('_')[:-1])
-            idx = img_name.split('_')[-1]
-            try:
-                text = json_data[img_id][idx]['text']
-                bbox = json_data[img_id][idx]['bbox']
-            except:
-                text = ''
-                print(f'Error: {img_id}, {idx}')
-                
-            # Check if lq_path exists
-            if not os.path.exists(lq_path):
-                continue
-            if (bbox[2]*bbox[3])/(512*512) < 0.01:
-                continue
 
-            files.append({"image_path": gt_path, "lr_image_path": lq_path, "prompt": '', "text": text, "bbox": bbox, "img_name": img_name})
-    
-    if mode=='val':
-        files = random.sample(files, 16)
+        if data_type == 'lsdir' or data_type == 'realsr':
+
+            json_path = f'{data_type}_adjust_label_{mode}.json'
+            with open(os.path.join(base_dir, json_path), 'r') as f:
+                json_data = json.load(f)
+
+            for img_path in os.listdir(os.path.join(file_list_path, data_type, mode, 'gt/512')):
+                gt_path = os.path.join(file_list_path, data_type, mode, 'gt/512', img_path)
+                lq_path = os.path.join(file_list_path, data_type, mode, 'image/512', img_path)
+                
+                img_name = img_path.split('.')[0]
+                img_id = '_'.join(img_name.split('_')[:-1])
+                idx = img_name.split('_')[-1]
+                try:
+                    text = json_data[img_id][idx]['text']
+                    bbox = json_data[img_id][idx]['bbox']
+                except:
+                    text = ''
+                    print(f'Error: {img_id}, {idx}')
+                    
+                # Check if lq_path exists
+                if not os.path.exists(lq_path):
+                    continue
+                if (bbox[2]*bbox[3])/(512*512) < 0.01:
+                    continue
+                files.append({"image_path": gt_path, "lr_image_path": lq_path, "prompt": '', "text": text, "bbox": bbox, "img_name": img_name})
+
+        elif data_type == 'TextOCR':
+
+            json_path = f'{mode}_dataset_modified_filtered.json'
+            with open(os.path.join(base_dir, json_path), 'r') as f:
+                json_data = json.load(f)
+
+            for img_path in os.listdir(f'{file_list_path}/{data_type}/{mode}'):
+                gt_path = os.path.join(file_list_path, data_type, mode, img_path)
+                lq_path = os.path.join(file_list_path, data_type, mode, img_path)       # SAME AS GT for NOW !!!!
+                
+                img_name = img_path.split('/')[-1].split('.')[0]
+                img_id = img_name.split('/')[-1].split('_')[0]
+                crop_id = img_name.split('/')[-1].split('_')[-1].split('.')[0]
+                ann = json_data[img_id][crop_id]
+                
+                boxes=[]
+                texts=[]
+                prompts=[]
+                for i in range(len(ann)):
+                    # text preprocess
+                    text=ann[i]['text']
+                    if text == '.':
+                        continue
+
+                    # box preprocess
+                    box=ann[i]['bbox']
+                    box = list(map(int,box))
+
+                    # prompt preprocess
+                    prompt=f'A high-quality photo containing the word "{text}"'
+
+                    boxes.append(box)
+                    texts.append(text)
+                    prompts.append(prompt)
+
+                files.append({"image_path": gt_path, "lr_image_path": lq_path, "prompt": prompts, "text": texts, "bbox": boxes, "img_name": img_name})
+
+    # if mode=='val':
+    #     files = random.sample(files, 16)
     return files
 
 def load_file_metas(file_metas: List[Dict[str, str]]) -> List[Dict[str, str]]:
