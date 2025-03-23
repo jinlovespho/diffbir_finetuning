@@ -274,7 +274,7 @@ def parse_args():
     parser.add_argument(
         "--validation_prompts",
         type=str,
-        default=None,
+        default='',
         nargs="+",
         help=("A set of prompts evaluated every `--validation_epochs` and logged to `--report_to`."),
     )
@@ -595,6 +595,7 @@ def main():
 
         # JLP logging
         if args.report_to == 'wandb':
+            wandb.login(key="e32eed0c2509bf898b850b0065ab62345005fb73")
             wandb.init(project=args.wandb_proj_name, name=args.wandb_exp_name, config=vars(args))
 
     # Load scheduler, tokenizer and models.
@@ -852,9 +853,11 @@ def main():
     with accelerator.main_process_first():
         if args.max_train_samples is not None:   # for debugging purpose, look at parser help 
             dataset["train"] = dataset["train"].shuffle(seed=args.seed).select(range(args.max_train_samples))
+            train_ds["train"] = train_ds["train"].shuffle(seed=args.seed).select(range(args.max_train_samples))
         # Set the training transforms
         train_dataset = dataset["train"].with_transform(preprocess_train)   # this is applied right before __getitem__
         # JLP - process our data 
+
         train_ds = train_ds['train'].with_transform(preprocess_train) 
         val_ds = val_ds['val'].with_transform(preprocess_train) 
 
@@ -948,6 +951,11 @@ def main():
     text_encoder.to(accelerator.device, dtype=weight_dtype)
     vae.to(accelerator.device, dtype=weight_dtype)
 
+
+    # print(train_dataloader.total_batch_size)
+    # print(train_dataloader.total_dataset_length)
+
+    # breakpoint()
     # We need to recalculate our total training steps as the size of the training dataloader may have changed.
     num_update_steps_per_epoch = math.ceil(len(train_dataloader) / args.gradient_accumulation_steps)
     if args.max_train_steps is None:
@@ -978,7 +986,8 @@ def main():
     total_batch_size = args.train_batch_size * accelerator.num_processes * args.gradient_accumulation_steps
 
     logger.info("***** Running training *****")
-    logger.info(f"  Num examples = {len(train_dataset)}")
+    logger.info(f"  Num train examples = {len(train_ds)}")
+    logger.info(f'  Num val examples = {0}')
     logger.info(f"  Num Epochs = {args.num_train_epochs}")
     logger.info(f"  Instantaneous batch size per device = {args.train_batch_size}")
     logger.info(f"  Total train batch size (w. parallel, distributed & accumulation) = {total_batch_size}")
@@ -1147,7 +1156,10 @@ def main():
                         accelerator.save_state(save_path)
                         logger.info(f"Saved state to {save_path}")
 
-            logs = {"step_loss": loss.detach().item(), "lr": lr_scheduler.get_last_lr()[0]}
+            logs = {"step_loss": loss.detach().item(), 
+                    "lr": lr_scheduler.get_last_lr()[0], 
+                    'current_epoch':f'{epoch}/{args.num_train_epochs}'}
+            
             progress_bar.set_postfix(**logs)
 
             if global_step >= args.max_train_steps:
