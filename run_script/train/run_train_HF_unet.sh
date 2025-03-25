@@ -1,8 +1,10 @@
 MODEL_NAME="stabilityai/stable-diffusion-2-1-base"
-dataset_name="lambdalabs/naruto-blip-captions"
+dataset_path="./generated_data"
+dataset_name="textocr"
 
 DATA_ARGS="
   --dataset_name ${dataset_name} \
+  --dataset_path ${dataset_path} \
   --resolution 512 \
 "
 
@@ -14,22 +16,26 @@ TRAINING_ARGS="
   --seed 42 \
   --lr_scheduler="constant" \
   --lr_warmup_steps=0 \
-  --gradient_accumulation_steps=4 \
+  --gradient_accumulation_steps=16 \
   --gradient_checkpointing \
+  --checkpointing_steps 500 \
   --learning_rate 1e-5 \
-  --max_train_steps=15000 \
+  --max_train_steps=30000 \
   --train_batch_size 4 \
+
 "
+  # --max_train_samples 50 \
 
 VAL_ARGS="
   --validation_epochs 1 \
+  --val_batch_size 6 \
 "
 
 LOGGING_ARGS="
   --output_dir output_dir \
   --report_to wandb \
-  --wandb_proj_name DiffBIR_OCR_UNet\
-  --wandb_exp_name pho_gpu1_UNet_test \
+  --tracker_project_name DiffBIR_OCR_UNet\
+  --wandb_exp_name pho_gpu1_textocr_UNet_lr1e-5_bs4_gradaccum16 \
 "
 
 ETC_ARGS="
@@ -37,7 +43,7 @@ ETC_ARGS="
   --enable_xformers_memory_efficient_attention \
 "
 
-CUDA_VISIBLE_DEVICES=3 accelerate launch diffusers/examples/text_to_image/train_text_to_image.py  ${DATA_ARGS} \
+CUDA_VISIBLE_DEVICES=1 accelerate launch diffusers/examples/text_to_image/train_text_to_image.py  ${DATA_ARGS} \
                                                                                                   ${MODEL_ARGS} \
                                                                                                   ${TRAINING_ARGS} \
                                                                                                   ${VAL_ARGS} \

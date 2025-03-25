@@ -274,9 +274,12 @@ def parse_args():
     parser.add_argument(
         "--validation_prompts",
         type=str,
-        default='',
-        nargs="+",
-        help=("A set of prompts evaluated every `--validation_epochs` and logged to `--report_to`."),
+        nargs="+",  # This allows multiple space-separated values
+
+        default=['A photo of a boy holding a sign "Hello World".', 
+                 'A movie poster of "Batman Begins".'],
+
+        help="A set of prompts evaluated every `--validation_epochs` and logged to `--report_to`.",
     )
     parser.add_argument(
         "--output_dir",
@@ -506,13 +509,14 @@ def parse_args():
     )
 
 
-    # JLP args
-    parser.add_argument('--wandb_proj_name', type=str)
+    # DATA args 
+    parser.add_argument('--dataset_path', type=str)
+
+    # VAL args 
+    parser.add_argument('--val_batch_size', type=int)
+
+    # LOGGING args
     parser.add_argument('--wandb_exp_name',  type=str)
-
-
-
-
 
     args = parser.parse_args()
     env_local_rank = int(os.environ.get("LOCAL_RANK", -1))
@@ -538,7 +542,6 @@ def main():
             "You cannot use both --report_to=wandb and --hub_token due to a security risk of exposing your token."
             " Please use `huggingface-cli login` to authenticate with the Hub."
         )
-
     if args.non_ema_revision is not None:
         deprecate(
             "non_ema_revision!=None",
@@ -549,20 +552,16 @@ def main():
             ),
         )
     logging_dir = os.path.join(args.output_dir, args.logging_dir)
-
     accelerator_project_config = ProjectConfiguration(project_dir=args.output_dir, logging_dir=logging_dir)
-
     accelerator = Accelerator(
         gradient_accumulation_steps=args.gradient_accumulation_steps,
         mixed_precision=args.mixed_precision,
         log_with=args.report_to,
         project_config=accelerator_project_config,
     )
-
     # Disable AMP for MPS.
     if torch.backends.mps.is_available():
         accelerator.native_amp = False
-
     # Make one log on every process with the configuration for debugging.
     logging.basicConfig(
         format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
@@ -578,25 +577,22 @@ def main():
         datasets.utils.logging.set_verbosity_error()
         transformers.utils.logging.set_verbosity_error()
         diffusers.utils.logging.set_verbosity_error()
-
     # If passed along, set the training seed now.
     if args.seed is not None:
         set_seed(args.seed)
-
     # Handle the repository creation
     if accelerator.is_main_process:
         if args.output_dir is not None:
             os.makedirs(args.output_dir, exist_ok=True)
-
         if args.push_to_hub:
             repo_id = create_repo(
                 repo_id=args.hub_model_id or Path(args.output_dir).name, exist_ok=True, token=args.hub_token
             ).repo_id
 
-        # JLP logging
-        if args.report_to == 'wandb':
-            wandb.login(key="e32eed0c2509bf898b850b0065ab62345005fb73")
-            wandb.init(project=args.wandb_proj_name, name=args.wandb_exp_name, config=vars(args))
+        # # JLP logging
+        # if args.report_to == 'wandb':
+        #     wandb.login(key="e32eed0c2509bf898b850b0065ab62345005fb73")
+        #     wandb.init(project=args.wandb_proj_name, name=args.wandb_exp_name, config=vars(args))
 
     # Load scheduler, tokenizer and models.
     noise_scheduler = DDPMScheduler.from_pretrained(args.pretrained_model_name_or_path, subfolder="scheduler")
@@ -611,7 +607,6 @@ def main():
         deepspeed_plugin = AcceleratorState().deepspeed_plugin if accelerate.state.is_initialized() else None
         if deepspeed_plugin is None:
             return []
-
         return [deepspeed_plugin.zero3_init_context_manager(enable=False)]
 
     # Currently Accelerate doesn't know how to handle multiple models under Deepspeed ZeRO stage 3.
@@ -746,57 +741,34 @@ def main():
     # val_ds = load_dataset('imagefolder', data_dir='./generated_data/TextOCR/val', split='val')
   
     # Jaewon load data
-    data_path = './generated_data'
+    data_path = args.dataset_path
     train_ds = load_custom_dataset(path=data_path, split='train')
     val_ds = load_custom_dataset(path=data_path, split='val')
 
-    # Get the datasets: you can either provide your own training and evaluation files (see below)
-    # or specify a Dataset from the hub (the dataset will be downloaded automatically from the datasets Hub).
+    # # In distributed training, the load_dataset function guarantees that only one local process can concurrently
+    # # download the dataset.
+    # if args.dataset_name is not None:
+    #     # Downloading and loading a dataset from the hub.
+    #     dataset = load_dataset(
+    #         args.dataset_name,
+    #         args.dataset_config_name,
+    #         cache_dir=args.cache_dir,
+    #         data_dir=args.train_data_dir,
+    #     )
+    # else:
+    #     data_files = {}
+    #     if args.train_data_dir is not None:
+    #         data_files["train"] = os.path.join(args.train_data_dir, "**")
+    #     dataset = load_dataset(
+    #         "imagefolder",
+    #         data_files=data_files,
+    #         cache_dir=args.cache_dir,
+    #     )
+    #     # See more about loading custom images at
+    #     # https://huggingface.co/docs/datasets/v2.4.0/en/image_load#imagefolder
 
-    # In distributed training, the load_dataset function guarantees that only one local process can concurrently
-    # download the dataset.
-    if args.dataset_name is not None:
-        # Downloading and loading a dataset from the hub.
-        dataset = load_dataset(
-            args.dataset_name,
-            args.dataset_config_name,
-            cache_dir=args.cache_dir,
-            data_dir=args.train_data_dir,
-        )
-    else:
-        data_files = {}
-        if args.train_data_dir is not None:
-            data_files["train"] = os.path.join(args.train_data_dir, "**")
-        dataset = load_dataset(
-            "imagefolder",
-            data_files=data_files,
-            cache_dir=args.cache_dir,
-        )
-        # See more about loading custom images at
-        # https://huggingface.co/docs/datasets/v2.4.0/en/image_load#imagefolder
-
-    # Preprocessing the datasets.
-    # We need to tokenize inputs and targets.
-    column_names = dataset["train"].column_names
-
-    # 6. Get the column names for input/target.
-    dataset_columns = DATASET_NAME_MAPPING.get(args.dataset_name, None)
-    if args.image_column is None:
-        image_column = dataset_columns[0] if dataset_columns is not None else column_names[0]
-    else:   # t
-        image_column = args.image_column
-        if image_column not in column_names:
-            raise ValueError(
-                f"--image_column' value '{args.image_column}' needs to be one of: {', '.join(column_names)}"
-            )
-    if args.caption_column is None:
-        caption_column = dataset_columns[1] if dataset_columns is not None else column_names[1]
-    else:
-        caption_column = args.caption_column
-        if caption_column not in column_names:
-            raise ValueError(
-                f"--caption_column' value '{args.caption_column}' needs to be one of: {', '.join(column_names)}"
-            )
+    image_column = 'image'
+    caption_column = 'text'
 
     # Preprocessing the datasets.
     # We need to tokenize input captions and transform the images.
@@ -814,7 +786,7 @@ def main():
                 # JLP - put all texts in a single prompt
                 caption = [f'"{text}"' for text in caption]
                 prompt = f"A high-quality photo containing the word {', '.join(caption) }."
-                print('Prompt: ', prompt)
+                # print('Prompt: ', prompt)
                 captions.append(prompt)
                 
                 # JLP - multiple captions
@@ -841,7 +813,6 @@ def main():
 
     def preprocess_train(examples):
         # breakpoint()
-        # process image 
         images = [image.convert("RGB") for image in examples[image_column]]
         examples["pixel_values"] = [train_transforms(image) for image in images]    # [img0, img1, . . ]
         # process texts (put all texts in a single prompt)
@@ -852,51 +823,50 @@ def main():
 
     with accelerator.main_process_first():
         if args.max_train_samples is not None:   # for debugging purpose, look at parser help 
-            dataset["train"] = dataset["train"].shuffle(seed=args.seed).select(range(args.max_train_samples))
             train_ds["train"] = train_ds["train"].shuffle(seed=args.seed).select(range(args.max_train_samples))
-        # Set the training transforms
-        train_dataset = dataset["train"].with_transform(preprocess_train)   # this is applied right before __getitem__
-        # JLP - process our data 
-
         train_ds = train_ds['train'].with_transform(preprocess_train) 
         val_ds = val_ds['val'].with_transform(preprocess_train) 
 
-    # train_dataset[0].keys(): ['image', 'text', 'pixel_values', 'input_ids']
-    # train_ds[0].keys()     : ['image', 'text', 'bbox', 'prompt', 'pixel_values', 'input_ids']
-
-    # The actual values that are being returned from loaders
-    # 여기서 batch로 쌓아서 다 넘겨주네
     def collate_fn(examples):
         # examples = [sample0, sample1, ... ] 꼴로 리스트로 담겨있어
         # where, sample0.keys(): ['image', 'text', ... ]
 
-        bs = len(examples)
-        all_boxes=[]
-        all_texts=[]
-        all_enc_texts=[]
-        all_prompts=[]
-        num_box_per_img = []
-        for i in range(bs):
-            boxes = examples[i]['bbox']
-            texts = examples[i]['text']
-            assert len(boxes) == len(texts), 'JLP - check number of boxes and texts'
+        batch_dict={}
 
-            # add box
-            all_boxes.append(boxes)
-            # add text
-            all_texts.append(texts)
-            # add encoded text
-            encoded_all_texts = tokenizer(texts, max_length=tokenizer.model_max_length, padding="max_length", truncation=True, return_tensors="pt")
-            all_enc_texts.append(encoded_all_texts.input_ids)
-            # add captions
-            all_prompts.append(examples[i]['captions'])
+        if args.dataset_name == 'textocr':
+            bs = len(examples)
+            all_boxes=[]
+            all_texts=[]
+            all_enc_texts=[]
+            all_prompts=[]
+            num_box_per_img = []
+            for i in range(bs):
+                boxes = examples[i]['bbox']
+                texts = examples[i]['text']
+                assert len(boxes) == len(texts), 'JLP - check number of boxes and texts'
+
+                # add box
+                all_boxes.append(boxes)
+                # add text
+                all_texts.append(texts)
+                # add encoded text
+                encoded_all_texts = tokenizer(texts, max_length=tokenizer.model_max_length, padding="max_length", truncation=True, return_tensors="pt")
+                all_enc_texts.append(encoded_all_texts.input_ids)
+                # add captions
+                all_prompts.append(examples[i]['captions'])
+
+                batch_dict['boxes'] = all_boxes 
+                batch_dict['texts'] = all_texts 
+                batch_dict['prompts'] = all_prompts 
 
         pixel_values = torch.stack([example["pixel_values"] for example in examples])       # b 3 512 512 
         pixel_values = pixel_values.to(memory_format=torch.contiguous_format).float()   
         input_ids = torch.stack([example["input_ids"] for example in examples])             # b 77
 
-        # 즉 여기서 최종 batch형태로 다 쌓아주고 return
-        return {"pixel_values": pixel_values, "input_ids": input_ids, 'boxes': all_boxes, 'texts': all_texts, 'prompts': all_prompts}
+        batch_dict['pixel_values'] = pixel_values 
+        batch_dict['input_ids'] = input_ids 
+
+        return batch_dict
 
     # DataLoaders creation:
     train_dataloader = torch.utils.data.DataLoader(
@@ -904,6 +874,13 @@ def main():
         shuffle=True,
         collate_fn=collate_fn,
         batch_size=args.train_batch_size,
+        num_workers=args.dataloader_num_workers,
+    )
+    val_dataloader = torch.utils.data.DataLoader(
+        val_ds,
+        shuffle=False,
+        collate_fn=collate_fn,
+        batch_size=args.val_batch_size,
         num_workers=args.dataloader_num_workers,
     )
 
@@ -951,11 +928,6 @@ def main():
     text_encoder.to(accelerator.device, dtype=weight_dtype)
     vae.to(accelerator.device, dtype=weight_dtype)
 
-
-    # print(train_dataloader.total_batch_size)
-    # print(train_dataloader.total_dataset_length)
-
-    # breakpoint()
     # We need to recalculate our total training steps as the size of the training dataloader may have changed.
     num_update_steps_per_epoch = math.ceil(len(train_dataloader) / args.gradient_accumulation_steps)
     if args.max_train_steps is None:
@@ -974,7 +946,13 @@ def main():
     if accelerator.is_main_process:
         tracker_config = dict(vars(args))
         tracker_config.pop("validation_prompts")
-        accelerator.init_trackers(args.tracker_project_name, tracker_config)
+        accelerator.init_trackers(
+            project_name=args.tracker_project_name, 
+            init_kwargs={
+                'wandb':{
+                    'name':args.wandb_exp_name,
+                    'config':tracker_config}}
+            )
 
     # Function for unwrapping if model was compiled with `torch.compile`.
     def unwrap_model(model):
@@ -1032,6 +1010,7 @@ def main():
         disable=not accelerator.is_local_main_process,
     )
 
+    # Train loop
     for epoch in range(first_epoch, args.num_train_epochs):
         train_loss = 0.0
         for step, batch in enumerate(train_dataloader):
@@ -1053,7 +1032,8 @@ def main():
                 #     cv2.imwrite(f'./img{i}.jpg', img[:,:,::-1])
 
                 # Convert images to latent space
-                latents = vae.encode(batch["pixel_values"].to(weight_dtype)).latent_dist.sample()   # z_0: b 4 64 64 
+                img = batch["pixel_values"].to(weight_dtype)
+                latents = vae.encode(img).latent_dist.sample()   # z_0: b 4 64 64 
                 latents = latents * vae.config.scaling_factor
 
                 # Sample noise that we'll add to the latents
@@ -1082,9 +1062,36 @@ def main():
                 else:
                     raise ValueError(f"Unknown prediction type {noise_scheduler.config.prediction_type}")
 
-                # breakpoint()
                 # Predict the noise residual and compute loss
-                model_pred = unet(noisy_latents, timesteps, encoder_hidden_states, return_dict=False)[0]
+                model_pred = unet(noisy_latents, timesteps, encoder_hidden_states, return_dict=False)[0]    # b 4 64 64
+
+                # # JLP -vis decoded images
+                # noisy_img = vae.decode(noisy_latents/vae.config.scaling_factor).sample    # b 3 512 512 
+                # noisy_img = (noisy_img + 1)/2.0
+                # img = (img + 1)/2.0
+                # save_image(img, './img_x_0.jpg')
+                # save_image(noisy_img, './img_x_t.jpg')
+
+                # prev_samples=[]
+                # pred_samples=[]
+                # for i in range(bsz):
+                #     out = noise_scheduler.step(model_pred[i], timesteps[i], noisy_latents[i])
+                #     prev_z_t = out.prev_sample              # 4 64 64
+                #     pred_z_0 = out.pred_original_sample     # 4 64 64 
+
+                #     prev_x_t = vae.decode(prev_z_t.unsqueeze(0)/vae.config.scaling_factor).sample     # 1 3 512 512
+                #     pred_x_0 = vae.decode(pred_z_0.unsqueeze(0)/vae.config.scaling_factor).sample     # 1 3 512 512
+
+                #     prev_x_t = (prev_x_t.detach().cpu() + 1) / 2.0
+                #     pred_x_0 = (pred_x_0.detach().cpu() + 1) / 2.0
+
+                #     prev_samples.append(prev_x_t)
+                #     pred_samples.append(pred_x_0)
+
+                # prev_samples = torch.cat(prev_samples)
+                # pred_samples = torch.cat(pred_samples)
+                # save_image(prev_samples, './img_x_t-1.jpg')
+                # save_image(pred_samples, './img_pred_x_0.jpg')
 
                 if args.snr_gamma is None:
                     loss = F.mse_loss(model_pred.float(), target.float(), reduction="mean")
@@ -1127,9 +1134,10 @@ def main():
                         ema_unet.to(device="cpu", non_blocking=True)
                 progress_bar.update(1)
                 global_step += 1
-                accelerator.log({"train_loss": train_loss}, step=global_step)
+                accelerator.log({"loss/avg_train_loss": train_loss}, step=global_step)
                 train_loss = 0.0
 
+                # save model
                 if global_step % args.checkpointing_steps == 0:
                     if accelerator.is_main_process:
                         # _before_ saving state, check if this save would set us over the `checkpoints_total_limit`
@@ -1156,11 +1164,17 @@ def main():
                         accelerator.save_state(save_path)
                         logger.info(f"Saved state to {save_path}")
 
-            logs = {"step_loss": loss.detach().item(), 
+                        
+            logs = {"loss/diffusion_step_loss": loss.detach().item(), 
                     "lr": lr_scheduler.get_last_lr()[0], 
-                    'current_epoch':f'{epoch}/{args.num_train_epochs}'}
+                    'current_epoch': epoch,
+                    'global_step:': global_step}
             
             progress_bar.set_postfix(**logs)
+
+            # JLP wandb log
+            if accelerator.is_main_process:
+                accelerator.log(logs, step=global_step)
 
             if global_step >= args.max_train_steps:
                 break

@@ -326,6 +326,7 @@ class FullAdapter(nn.Module):
         capturing information at a different stage of processing within the FullAdapter model. The number of feature
         tensors in the list is determined by the number of downsample blocks specified during initialization.
         """
+        # breakpoint()
         x = self.unshuffle(x)
         x = self.conv_in(x)
 

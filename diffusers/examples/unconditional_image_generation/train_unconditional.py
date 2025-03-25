@@ -27,6 +27,8 @@ from diffusers.training_utils import EMAModel
 from diffusers.utils import check_min_version, is_accelerate_version, is_tensorboard_available, is_wandb_available
 from diffusers.utils.import_utils import is_xformers_available
 
+from torchvision.utils import save_image 
+
 
 # Will error if the minimal version of diffusers is not installed. Remove at your own risks.
 check_min_version("0.33.0.dev0")
@@ -548,7 +550,8 @@ def main(args):
                     progress_bar.update(1)
                 continue
 
-            clean_images = batch["input"].to(weight_dtype)
+            # breakpoint()
+            clean_images = batch["input"].to(weight_dtype)  # b 3 64 64 
             # Sample noise that we'll add to the images
             noise = torch.randn(clean_images.shape, dtype=weight_dtype, device=clean_images.device)
             bsz = clean_images.shape[0]
@@ -559,11 +562,11 @@ def main(args):
 
             # Add noise to the clean images according to the noise magnitude at each timestep
             # (this is the forward diffusion process)
-            noisy_images = noise_scheduler.add_noise(clean_images, noise, timesteps)
+            noisy_images = noise_scheduler.add_noise(clean_images, noise, timesteps)    # b 3 64 64 
 
             with accelerator.accumulate(model):
                 # Predict the noise residual
-                model_output = model(noisy_images, timesteps).sample
+                model_output = model(noisy_images, timesteps).sample    # b 3 64 64
 
                 if args.prediction_type == "epsilon":
                     loss = F.mse_loss(model_output.float(), noise.float())  # this could have different weights!

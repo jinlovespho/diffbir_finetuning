@@ -892,6 +892,7 @@ class StableDiffusionPipeline(
                 "not-safe-for-work" (nsfw) content.
         """
 
+        # breakpoint()
         callback = kwargs.pop("callback", None)
         callback_steps = kwargs.pop("callback_steps", None)
 
@@ -1031,7 +1032,8 @@ class StableDiffusionPipeline(
             for i, t in enumerate(timesteps):
                 if self.interrupt:
                     continue
-
+                
+                # breakpoint()
                 # expand the latents if we are doing classifier free guidance
                 latent_model_input = torch.cat([latents] * 2) if self.do_classifier_free_guidance else latents
                 latent_model_input = self.scheduler.scale_model_input(latent_model_input, t)
@@ -1047,6 +1049,7 @@ class StableDiffusionPipeline(
                     return_dict=False,
                 )[0]
 
+                # breakpoint()
                 # perform guidance
                 if self.do_classifier_free_guidance:
                     noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)

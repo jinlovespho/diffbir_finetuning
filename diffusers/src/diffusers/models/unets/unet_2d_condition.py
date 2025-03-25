@@ -1188,7 +1188,7 @@ class UNet2DConditionModel(
         if USE_PEFT_BACKEND:
             # weight the lora layers by setting `lora_scale` for each PEFT layer
             scale_lora_layers(self, lora_scale)
-
+        
         is_controlnet = mid_block_additional_residual is not None and down_block_additional_residuals is not None
         # using new arg down_intrablock_additional_residuals for T2I-Adapters, to distinguish from controlnets
         is_adapter = down_intrablock_additional_residuals is not None
@@ -1228,7 +1228,7 @@ class UNet2DConditionModel(
                 sample, res_samples = downsample_block(hidden_states=sample, temb=emb)
                 if is_adapter and len(down_intrablock_additional_residuals) > 0:
                     sample += down_intrablock_additional_residuals.pop(0)
-
+            
             down_block_res_samples += res_samples
 
         # down_block_res_samples: (1st_feature, 2nd_feature, . . . last_feature)   # features are added this way.

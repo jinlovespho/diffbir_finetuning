@@ -759,6 +759,7 @@ class DiffusionPipeline(ConfigMixin, PushToHubMixin):
             if load_connected_pipeline:
                 raise NotImplementedError("Connected pipelines are not supported with DDUF at the moment.")
 
+        # breakpoint()
         # 1. Download the checkpoints and configs
         # use snapshot download here to get it working from from_pretrained
         if not os.path.isdir(pretrained_model_name_or_path):

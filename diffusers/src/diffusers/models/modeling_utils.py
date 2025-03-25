@@ -988,8 +988,9 @@ class ModelMixin(torch.nn.Module, PushToHubMixin):
         config = copy.deepcopy(config)
 
         # JLP 
+        # breakpoint()
         if config['_class_name'] == 'UNet2DConditionModel':
-            config['model_args'] = kwargs['model_args']
+            config['model_args'] = kwargs.get('model_args', None)
 
 
         # determine initial quantization config.

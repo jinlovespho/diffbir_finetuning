@@ -811,7 +811,7 @@ class StableDiffusionAdapterPipeline(DiffusionPipeline, StableDiffusionMixin, Fr
 
         self._guidance_scale = guidance_scale
 
-        if isinstance(self.adapter, MultiAdapter):
+        if isinstance(self.adapter, MultiAdapter):  # f
             adapter_input = []
 
             for one_image in image:
@@ -877,11 +877,11 @@ class StableDiffusionAdapterPipeline(DiffusionPipeline, StableDiffusionMixin, Fr
             ).to(device=device, dtype=latents.dtype)
 
         # 7. Denoising loop
-        if isinstance(self.adapter, MultiAdapter):
+        if isinstance(self.adapter, MultiAdapter):  # f
             adapter_state = self.adapter(adapter_input, adapter_conditioning_scale)
             for k, v in enumerate(adapter_state):
                 adapter_state[k] = v
-        else:
+        else:   # t
             adapter_state = self.adapter(adapter_input)
             for k, v in enumerate(adapter_state):
                 adapter_state[k] = v * adapter_conditioning_scale
@@ -899,6 +899,7 @@ class StableDiffusionAdapterPipeline(DiffusionPipeline, StableDiffusionMixin, Fr
                 latent_model_input = torch.cat([latents] * 2) if self.do_classifier_free_guidance else latents
                 latent_model_input = self.scheduler.scale_model_input(latent_model_input, t)
 
+                breakpoint()
                 # predict the noise residual
                 noise_pred = self.unet(
                     latent_model_input,
